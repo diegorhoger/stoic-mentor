@@ -16,6 +16,7 @@ The project is structured as a client-server application:
    - Mentor information retrieval
    - Text-to-speech conversion
    - Speech-to-text transcription
+   - AI-powered mentor responses via OpenAI integration
 
 ### API Design
 
@@ -25,6 +26,7 @@ The API is designed to be simple and RESTful:
 - `GET /api/mentors`: Retrieve available mentor personalities
 - `POST /api/tts`: Convert text to speech using a mock generator
 - `POST /api/transcribe`: Transcribe speech to text using mock responses
+- `POST /api/gpt`: Generate mentor responses using OpenAI's GPT-4 model
 
 ### Mock Implementation Strategy
 
@@ -107,6 +109,47 @@ Components are designed to be modular and reusable:
 - **WaveformVisualizer**: Visual representation of audio levels during recording and playback
 
 ## Recent Changes
+
+### Implemented OpenAI API Integration for Authentic Stoic Responses
+
+**Change**: Enhanced the backend to forward requests to the OpenAI API instead of generating mock responses.
+
+**Rationale**: While the mock backend provided reliable responses, integrating with OpenAI's GPT-4 model offers more dynamic, contextually aware responses that can address a wider range of philosophical questions while maintaining the authentic voice of each Stoic mentor.
+
+**Implementation Details**:
+- Added OpenAI Python library integration in the Flask backend
+- Created detailed system prompts for each Stoic philosopher that capture their unique voice and teaching style
+- Implemented proper conversation history handling for contextual awareness
+- Added robust error handling with fallback to mock responses when API calls fail
+- Maintained the sanitization pipeline to remove unwanted acknowledgment phrases
+- Added comprehensive logging to trace the request/response flow
+
+**Impact**: Users now experience:
+- More dynamic and nuanced philosophical responses from each Stoic mentor
+- Contextually aware conversations that reference previous exchanges
+- Authentic Stoic wisdom that maintains the distinctive voice of each philosopher
+- Seamless fallback to reliable mock responses if API issues occur
+
+### Enhanced Stoic Mentor Prompts
+
+**Change**: Reimplemented the mentor prompt system to provide more immersive, emotionally supportive responses that authentically reflect the distinct voices of each Stoic mentor.
+
+**Rationale**: The previous system used simple static prompts that didn't fully capture the unique personalities and teaching styles of the Stoic mentors. The new implementation:
+1. Creates a dedicated module for mentor prompts with more nuanced character guidance
+2. Provides both verbose and concise prompt options for different use cases
+3. Includes specific tone guides for each mentor to ensure authentic role-playing
+
+**Implementation Details**:
+- Created a new `mentorPrompts.ts` file with enhanced prompt templates
+- Updated the `openaiService.ts` to use the new mentor prompts system
+- Modified the `createSystemPrompt` function to accept a mentor name rather than a prompt string
+- Updated the API service to generate responses using the new prompt system
+- Removed static prompt strings from the mentor personalities in constants
+
+**Impact**: The application now provides more authentic and personality-driven responses from each Stoic mentor. Users will experience:
+- More emotionally resonant guidance tailored to each mentor's unique perspective
+- Responses that better reflect the historical teaching style of each philosopher
+- Interactions that feel like true mentorship rather than generic philosophical advice
 
 ### Removed Unused Root `/src` Directory
 
