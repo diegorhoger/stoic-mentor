@@ -62,10 +62,13 @@ export const fetchMentors = async (): Promise<MentorsResponse> => {
  */
 export const checkApiHealth = async (): Promise<boolean> => {
   try {
+    const endpoint = `${API_ENDPOINTS.baseUrl}${API_ENDPOINTS.health}`;
+    console.log(`[API Health] Checking API health at ${endpoint}`);
+    
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
     
-    const response = await fetch(`${API_ENDPOINTS.baseUrl}${API_ENDPOINTS.health}`, {
+    const response = await fetch(endpoint, {
       method: 'GET',
       signal: controller.signal
     });
@@ -73,13 +76,15 @@ export const checkApiHealth = async (): Promise<boolean> => {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
+      console.log(`[API Health] Response not OK: ${response.status} ${response.statusText}`);
       return false;
     }
 
     const data = await response.json();
+    console.log(`[API Health] Received response:`, data);
     return data.status === 'ok';
   } catch (error) {
-    console.error('API health check failed:', error);
+    console.error('[API Health] API health check failed:', error);
     return false;
   }
 }; 

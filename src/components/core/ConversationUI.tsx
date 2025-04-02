@@ -73,10 +73,29 @@ const ConversationUI: React.FC = () => {
   
   // Process audio when recording stops
   const processAudio = useCallback(async () => {
-    console.log("processAudio called with states:", { isProcessing, isApiAvailable });
-    if (isProcessing || !isApiAvailable) {
-      console.log("Exiting processAudio early - processing:", isProcessing, "API available:", isApiAvailable);
+    console.log("[Process Audio] Called with states:", { 
+      isProcessing, 
+      isApiAvailable, 
+      isApiAvailableType: typeof isApiAvailable 
+    });
+    
+    if (isProcessing) {
+      console.log("[Process Audio] Exiting early - already processing");
       return;
+    }
+    
+    if (!isApiAvailable) {
+      console.log("[Process Audio] API not available. Attempting to recheck API health...");
+      const isAvailableNow = await checkApiHealth();
+      console.log("[Process Audio] API health recheck result:", isAvailableNow);
+      
+      if (!isAvailableNow) {
+        console.log("[Process Audio] API still not available after recheck. Exiting.");
+        return;
+      } else {
+        console.log("[Process Audio] API is now available. Continuing processing.");
+        setIsApiAvailable(true);
+      }
     }
     
     setIsProcessing(true);
