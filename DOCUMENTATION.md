@@ -161,4 +161,55 @@ Components are designed to be modular and reusable:
 
 After analysis, we determined that the root `/src` directory was not being used by any part of the application and contained only placeholder or incomplete code. All active development is properly contained within the `/stoic-mentor/src` directory for the frontend and the `/stoic-mentor/backend` directory for the API server.
 
-**Impact**: No functional impact to the application. This change simplifies the project structure and removes potential confusion about which source directory is actively used. 
+**Impact**: No functional impact to the application. This change simplifies the project structure and removes potential confusion about which source directory is actively used.
+
+## CI/CD Setup
+
+The project uses GitHub Actions for continuous integration and deployment, with specific workflows for web, backend, and mobile builds.
+
+### Web CI/CD (Vercel)
+
+- **Configuration Files**: 
+  - `.github/workflows/web.yml` - GitHub Actions workflow
+  - `vercel.json` - Vercel deployment configuration
+
+- **Process**:
+  1. On push to main branch or pull requests, the workflow runs linting and build tests
+  2. When merged to main, code is automatically deployed to Vercel
+  3. Environment variables are managed through Vercel's dashboard
+
+- **Required Secrets**:
+  - `VERCEL_TOKEN` - API token for Vercel
+  - `VERCEL_ORG_ID` - Organization ID from Vercel
+  - `VERCEL_PROJECT_ID` - Project ID from Vercel
+
+### Backend CI/CD
+
+- **Configuration Files**:
+  - `.github/workflows/backend.yml` - GitHub Actions workflow
+
+- **Process**:
+  1. Tests Python code using pytest
+  2. Deployment is configured based on your chosen backend hosting platform
+  3. Default setup includes placeholder for serverless function deployment
+
+### Mobile CI/CD (Expo)
+
+- **Configuration Files**:
+  - `.github/workflows/mobile.yml` - GitHub Actions workflow
+  - `eas.json` - Expo Application Services configuration
+
+- **Process**:
+  1. For pull requests: Builds preview versions using EAS Build
+  2. For merges to main: Builds production versions
+  3. Manual workflow dispatch option for app store submissions
+
+- **Required Secrets**:
+  - `EXPO_TOKEN` - API token for Expo
+
+### Local Development
+
+When developing locally, these CI/CD workflows don't impact your workflow. You can continue to use:
+- `npm run dev` - For web development
+- `expo start` - For mobile development (requires expo-cli)
+- `cd backend && flask run` - For backend development 
