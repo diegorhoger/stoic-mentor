@@ -6,24 +6,40 @@ interface AppLayoutProps {
 
 const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
-          <h1 className="text-2xl font-bold text-gray-900">Stoic Voice Mentor</h1>
-        </div>
-      </header>
-      <main className="flex-grow">
-        <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          {children}
-        </div>
-      </main>
-      <footer className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
-          <p className="text-center text-gray-500 text-sm">
+    <div style={{
+      width: '100%',
+      maxWidth: '100%',
+      backgroundColor: 'white',
+      color: 'black',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'flex-start',
+      minHeight: '100%',
+      padding: '0',
+      margin: '0'
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '500px',
+        padding: '0 16px',
+        backgroundColor: 'white'
+      }}>
+        {children}
+        
+        <footer style={{
+          width: '100%', 
+          padding: '16px 0',
+          textAlign: 'center'
+        }}>
+          <p style={{
+            color: '#a3a3a3',
+            fontSize: '12px'
+          }}>
             © {new Date().getFullYear()} Stoic Voice Mentor
           </p>
-        </div>
-      </footer>
+        </footer>
+      </div>
     </div>
   );
 };

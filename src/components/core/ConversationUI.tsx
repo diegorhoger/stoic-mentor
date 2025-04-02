@@ -1,21 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionStore } from '../../state/sessionStore';
 import { useMicStream } from '../../hooks/useMicStream';
-import WaveformVisualizer from '../UI/WaveformVisualizer';
-import VoiceButton from '../UI/VoiceButton';
-import TranscriptBox from './TranscriptBox';
 import { transcribeAudio, requestMicrophonePermission } from '../../services/whisperService';
 import { generateSpeech, playAudio, blobToBase64 } from '../../services/ttsService';
 import { checkApiHealth } from '../../services/mentorService';
-import { MENTOR_PERSONALITIES, API_ENDPOINTS } from '../../constants/app';
-import { MentorKey } from '../../types';
 
 const ConversationUI: React.FC = () => {
   // Global state
   const { 
     currentMentor, 
     isSpeaking, 
-    isListening, 
     setIsSpeaking, 
     setIsListening, 
     addMessage, 
@@ -23,7 +17,7 @@ const ConversationUI: React.FC = () => {
   } = useSessionStore();
   
   // Local state
-  const { isRecording, audioLevel, startRecording, stopRecording, getAudioBlob } = useMicStream();
+  const { isRecording, startRecording, stopRecording, getAudioBlob } = useMicStream();
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isApiAvailable, setIsApiAvailable] = useState<boolean | null>(null);
@@ -36,9 +30,7 @@ const ConversationUI: React.FC = () => {
   // Check API health on mount
   useEffect(() => {
     const checkApi = async () => {
-      console.log("Checking API health...");
       const isAvailable = await checkApiHealth();
-      console.log("API available:", isAvailable);
       setIsApiAvailable(isAvailable);
     };
     
@@ -47,10 +39,7 @@ const ConversationUI: React.FC = () => {
   
   // Process audio when recording stops
   useEffect(() => {
-    // Add a state change listener to handle recording stop
     if (!isRecording && wasRecording.current) {
-      console.log("Recording stopped, calling processAudio after delay");
-      // Small delay to allow audio chunks to be processed
       setTimeout(() => {
         setShouldProcessAudio(true);
       }, 500);
@@ -63,37 +52,22 @@ const ConversationUI: React.FC = () => {
   // Handle recording state changes
   useEffect(() => {
     if (isRecording) {
-      console.log("Recording started, setting isListening to true");
       setIsListening(true);
     } else {
-      console.log("Recording stopped, setting isListening to false");
       setIsListening(false);
     }
   }, [isRecording, setIsListening]);
   
   // Process audio when recording stops
   const processAudio = useCallback(async () => {
-    console.log("[Process Audio] Called with states:", { 
-      isProcessing, 
-      isApiAvailable, 
-      isApiAvailableType: typeof isApiAvailable 
-    });
-    
-    if (isProcessing) {
-      console.log("[Process Audio] Exiting early - already processing");
-      return;
-    }
+    if (isProcessing) return;
     
     if (!isApiAvailable) {
-      console.log("[Process Audio] API not available. Attempting to recheck API health...");
       const isAvailableNow = await checkApiHealth();
-      console.log("[Process Audio] API health recheck result:", isAvailableNow);
       
       if (!isAvailableNow) {
-        console.log("[Process Audio] API still not available after recheck. Exiting.");
         return;
       } else {
-        console.log("[Process Audio] API is now available. Continuing processing.");
         setIsApiAvailable(true);
       }
     }
@@ -103,31 +77,23 @@ const ConversationUI: React.FC = () => {
     setShouldProcessAudio(false);
     
     try {
-      console.log("Getting recorded audio blob...");
       // Get recorded audio
       const audioBlob = await getAudioBlob();
       if (!audioBlob) {
-        console.error("No audio blob received from recording");
         throw new Error('No audio recorded');
       }
-      console.log("Audio blob received, size:", audioBlob.size, "bytes");
       
       // Transcribe audio to text
-      console.log("Sending audio for transcription...");
-      
-      // Create whisper options with prompt to help guide transcription
       const transcriptionOptions = {
         language: 'en',
         prompt: 'This is a conversation about Stoic philosophy and philosophical guidance.',
-        temperature: 0.2 // Lower temperature for more accurate transcription
+        temperature: 0.2
       };
       
       const transcription = await transcribeAudio(audioBlob, transcriptionOptions);
-      console.log("Received transcription:", transcription);
       setUserText(transcription);
       
       // Add user message to history
-      console.log("Adding user message to history");
       addMessage({
         role: 'user',
         content: transcription,
@@ -135,35 +101,27 @@ const ConversationUI: React.FC = () => {
       });
       
       // Convert previous responses to context
-      console.log("Processing context from previous messages");
       const context = await Promise.all(
         history
           .filter(msg => msg.role === 'mentor')
-          .slice(-3) // Only use last 3 mentor messages for context
+          .slice(-3)
           .map(async (msg) => {
-            // Placeholder - in a real app, you'd have the audio data stored
-            // For now, we'll generate fake base64 audio
             return {
               text: msg.content,
               speaker: currentMentor === 'marcus' ? 0 : currentMentor === 'seneca' ? 1 : 2,
-              audio: 'base64audio' // This would be real base64 audio data in production
+              audio: 'base64audio'
             };
           })
       );
-      console.log("Context processed, entries:", context.length);
       
       // Generate mentor response
-      console.log("Starting mentor response generation");
       setIsSpeaking(true);
       
       // In a real implementation, we would call an LLM here
-      // For now, we'll use a placeholder response
       const response = `I understand what you're saying about "${transcription}". Let me think about that from a Stoic perspective...`;
-      console.log("Mentor response generated:", response);
       setMentorText(response);
       
       // Add mentor message to history
-      console.log("Adding mentor message to history");
       addMessage({
         role: 'mentor',
         content: response,
@@ -172,29 +130,20 @@ const ConversationUI: React.FC = () => {
       
       // Generate and play audio
       const speakerId = currentMentor === 'marcus' ? 0 : currentMentor === 'seneca' ? 1 : 2;
-      console.log("Generating speech with speaker ID:", speakerId);
       const audioResponse = await generateSpeech(response, speakerId, context);
-      console.log("Speech audio received, size:", audioResponse.size, "bytes");
       
       // Convert to base64 for future use
-      console.log("Converting audio to base64");
-      const audioBase64 = await blobToBase64(audioResponse);
-      console.log('Audio generated with base64 length:', audioBase64.length);
+      await blobToBase64(audioResponse);
       
       // Play the audio
-      console.log("Playing audio response");
       await playAudio(audioResponse);
-      console.log("Audio playback complete");
       setIsSpeaking(false);
       
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      console.error("Error in processAudio:", errorMessage);
       setError(`Error: ${errorMessage}`);
-      console.error(err);
       setIsSpeaking(false);
     } finally {
-      console.log("Completing audio processing");
       setIsProcessing(false);
     }
   }, [
@@ -211,10 +160,7 @@ const ConversationUI: React.FC = () => {
   
   // Process audio when flag is set
   useEffect(() => {
-    console.log("Processing effect triggered with shouldProcessAudio:", shouldProcessAudio);
-    
     if (shouldProcessAudio && !isProcessing) {
-      console.log("Calling processAudio from effect");
       processAudio();
     }
   }, [shouldProcessAudio, isProcessing, processAudio]);
@@ -223,140 +169,162 @@ const ConversationUI: React.FC = () => {
   const handleToggleRecording = async () => {
     try {
       if (isRecording) {
-        console.log("Stop recording button pressed");
         stopRecording();
       } else {
-        console.log("Start recording button pressed");
         setUserText('');
         setMentorText('');
         await startRecording();
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      console.error("Error in handleToggleRecording:", errorMessage);
+    } catch {
       setError(`Failed to access microphone. Please check permissions.`);
-      console.error(err);
     }
   };
   
   // Test microphone permissions
   const testMicrophonePermission = async () => {
     try {
-      console.log("Testing microphone permissions...");
       setMicPermissionStatus('checking...');
       const result = await requestMicrophonePermission();
-      console.log("Microphone permission test result:", result);
       setMicPermissionStatus(result ? 'granted' : 'denied');
-      
-      if (!result) {
-        setError('Microphone access denied. Please check your browser settings.');
-      } else {
-        setError(null);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      console.error("Error testing microphone:", errorMessage);
+    } catch {
       setMicPermissionStatus('error');
-      setError(`Error testing microphone: ${errorMessage}`);
     }
   };
-  
-  // Test direct API connection
-  const testDirectApiConnection = async () => {
-    try {
-      console.log("Testing direct API connection...");
-      const response = await fetch(`${API_ENDPOINTS.baseUrl}/api/health`, {
-        method: 'GET',
-      });
-      
-      const data = await response.json();
-      console.log("Direct API connection test result:", data);
-      
-      if (data.status === 'ok') {
-        setError(null);
-        alert('API connection successful! Status: ' + data.status);
-      } else {
-        setError('API connection failed.');
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      console.error("Error testing API connection:", errorMessage);
-      setError(`API connection error: ${errorMessage}`);
-    }
-  };
-  
+
   return (
-    <div className="flex flex-col items-center space-y-6 p-6">
-      {!isApiAvailable && isApiAvailable !== null && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          <p className="font-bold">API Not Available</p>
-          <p className="text-sm">Please make sure the backend API is running.</p>
-        </div>
-      )}
-      
-      <div className="text-center">
-        <h2 className="text-2xl font-bold mb-2">
-          {MENTOR_PERSONALITIES[currentMentor as MentorKey].name}
-        </h2>
-        <p className="text-gray-600">
-          {isListening ? 'Listening...' : isSpeaking ? 'Speaking...' : 'Click to speak'}
-        </p>
-        <p className="text-xs text-gray-500">
-          Mic Status: {micPermissionStatus}
-        </p>
+    <div style={{ width: '100%' }}>
+      <div style={{ 
+        fontSize: '13px', 
+        color: '#6b7280', 
+        marginBottom: '8px' 
+      }}>
+        Mic Status: {micPermissionStatus === 'unknown' ? 'pending' : micPermissionStatus}
       </div>
       
-      <div className="grid grid-cols-1 gap-4 w-full max-w-2xl">
-        <TranscriptBox 
-          text={userText}
-          isUser={true}
-          isActive={isListening}
-        />
+      <div style={{ 
+        border: '1px solid #e5e7eb', 
+        borderRadius: '8px', 
+        padding: '16px', 
+        marginBottom: '20px',
+        minHeight: '200px',
+        backgroundColor: 'white'
+      }}>
+        {userText && (
+          <div style={{ 
+            marginBottom: '16px',
+            display: 'flex',
+            justifyContent: 'flex-end'
+          }}>
+            <div style={{ 
+              backgroundColor: '#e9ecef', 
+              borderRadius: '12px 12px 0 12px',
+              padding: '10px 14px',
+              maxWidth: '80%'
+            }}>
+              {userText}
+            </div>
+          </div>
+        )}
         
-        <TranscriptBox 
-          text={mentorText}
-          isUser={false}
-          isActive={isSpeaking}
-        />
+        {!userText && !mentorText && (
+          <div style={{ 
+            color: '#9ca3af', 
+            textAlign: 'center',
+            marginTop: '40px'
+          }}>
+            Ask me something about stoicism...
+          </div>
+        )}
+        
+        {mentorText && (
+          <div style={{ 
+            marginBottom: '16px',
+            display: 'flex',
+            justifyContent: 'flex-start'
+          }}>
+            <div style={{ 
+              backgroundColor: '#f8f9fa', 
+              borderRadius: '12px 12px 12px 0',
+              padding: '10px 14px',
+              maxWidth: '80%',
+              border: '1px solid #e9ecef'
+            }}>
+              {mentorText}
+            </div>
+          </div>
+        )}
       </div>
       
-      <WaveformVisualizer
-        audioLevel={audioLevel}
-        isActive={isRecording || isSpeaking}
-        color={isRecording ? '#EF4444' : '#4F46E5'}
-        height={100}
-        width={300}
-      />
+      <div style={{ 
+        display: 'flex',
+        justifyContent: 'center',
+        marginBottom: '20px' 
+      }}>
+        <button
+          onClick={handleToggleRecording}
+          disabled={isProcessing || isSpeaking}
+          style={{
+            backgroundColor: '#f8f9fa',
+            border: '1px solid #e9ecef',
+            borderRadius: '24px',
+            padding: '12px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: (isProcessing || isSpeaking) ? 'not-allowed' : 'pointer',
+            opacity: (isProcessing || isSpeaking) ? 0.7 : 1,
+            transition: 'all 0.2s ease',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
+          }}
+        >
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            style={{ 
+              width: '20px',
+              height: '20px',
+              marginRight: '8px',
+              color: isRecording ? '#e53e3e' : '#4b5563'
+            }}
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor"
+          >
+            <path 
+              strokeLinecap="round" 
+              strokeLinejoin="round" 
+              strokeWidth={2} 
+              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" 
+            />
+          </svg>
+          <span style={{ fontSize: '14px', fontWeight: 500 }}>
+            {isRecording ? 'Stop Recording' : isProcessing ? 'Processing...' : isSpeaking ? 'Listening...' : 'Click to Speak'}
+          </span>
+        </button>
+      </div>
       
-      <div className="flex flex-col sm:flex-row items-center gap-4">
-        <VoiceButton
-          isRecording={isRecording}
-          isProcessing={isProcessing}
-          isSpeaking={isSpeaking}
-          onToggleRecording={handleToggleRecording}
-          size="lg"
-          className="my-4"
-        />
-        
-        <div className="flex flex-row gap-2">
-          <button
-            onClick={testMicrophonePermission}
-            className="px-4 py-2 rounded-full font-medium text-white bg-gray-500 hover:bg-gray-600"
-          >
-            Test Microphone
-          </button>
-          
-          <button
-            onClick={testDirectApiConnection}
-            className="px-4 py-2 rounded-full font-medium text-white bg-green-500 hover:bg-green-600"
-          >
-            Test API
-          </button>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <button 
+          onClick={testMicrophonePermission} 
+          style={{
+            backgroundColor: 'transparent',
+            border: 'none',
+            fontSize: '13px',
+            color: '#6b7280',
+            cursor: 'pointer',
+            padding: '4px 8px'
+          }}
+        >
+          Test Microphone
+        </button>
       </div>
       
       {error && (
-        <div className="text-red-500 text-center mt-4">
+        <div style={{
+          color: '#e53e3e',
+          marginTop: '12px',
+          fontSize: '13px',
+          textAlign: 'center'
+        }}>
           {error}
         </div>
       )}

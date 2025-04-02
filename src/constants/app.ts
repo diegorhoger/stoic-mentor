@@ -10,33 +10,37 @@ export const AUDIO_SETTINGS = {
 
 // API endpoints
 export const API_ENDPOINTS = {
-  baseUrl: import.meta.env.VITE_MOCK_API_URL || 'http://localhost:5001',
-  whisper: '/api/transcribe',
-  gpt: '/api/gpt',
-  tts: '/api/tts',
-  mentors: '/api/mentors',
+  baseUrl: 'http://localhost:5002',
   health: '/api/health',
-  stream: '/api/stream',
+  transcribe: '/api/transcribe',
+  tts: '/api/tts',
+  mentors: '/api/mentors'
 };
 
-// Mentor personalities
+// Personalities for mentors
 export const MENTOR_PERSONALITIES = {
   marcus: {
     name: 'Marcus Aurelius',
-    prompt: 'You are Marcus Aurelius. Speak calmly and with quiet strength...',
-    voiceId: 'marcus-v1',
     style: 'calm',
+    title: 'Philosopher and Roman Emperor',
+    years: '121-180 CE',
+    image: './images/marcus.png',
+    description: 'Known for his personal reflections in "Meditations", Marcus Aurelius ruled as Roman Emperor while practicing Stoic philosophy.'
   },
   seneca: {
     name: 'Seneca',
-    prompt: 'You are Seneca. Speak with eloquence and motivation...',
-    voiceId: 'seneca-v1',
     style: 'motivational',
+    title: 'Philosopher and Statesman',
+    years: '4 BCE-65 CE',
+    image: './images/seneca.png',
+    description: 'A Roman Stoic philosopher who served as advisor to Emperor Nero and wrote influential letters on ethics and natural philosophy.'
   },
   epictetus: {
     name: 'Epictetus',
-    prompt: 'You are Epictetus. Speak bluntly and challenge assumptions...',
-    voiceId: 'epictetus-v1',
     style: 'firm',
-  },
+    title: 'Stoic Philosopher and Former Slave',
+    years: '50-135 CE',
+    image: './images/epictetus.png',
+    description: 'Born a slave and later freed, Epictetus taught that philosophy is a way of life, not just an intellectual exercise.'
+  }
 }; 

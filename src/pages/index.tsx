@@ -2,22 +2,91 @@ import React from 'react';
 import AppLayout from '../components/layout/AppLayout';
 import ConversationUI from '../components/core/ConversationUI';
 import MentorSwitcher from '../components/core/MentorSwitcher';
+import { useSessionStore } from '../state/sessionStore';
+import { MENTOR_PERSONALITIES } from '../constants/app';
+
+// Import images directly
+const marcusImage = '/images/marcus.png';
+const senecaImage = '/images/seneca.png';
+const epictetusImage = '/images/epictetus.png';
+
+// Image mapping
+const mentorImages = {
+  marcus: marcusImage,
+  seneca: senecaImage,
+  epictetus: epictetusImage
+};
 
 const HomePage: React.FC = () => {
+  const { currentMentor } = useSessionStore();
+  const mentorData = MENTOR_PERSONALITIES[currentMentor];
+  
   return (
     <AppLayout>
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-white shadow rounded-lg p-6 mb-6">
-          <h2 className="text-xl font-semibold mb-4">Stoic Voice Mentor</h2>
-          <p className="text-gray-600 mb-4">
-            Choose a Stoic mentor and begin a conversation about life's challenges:
-          </p>
-          <MentorSwitcher />
+      <div style={{
+        paddingTop: '32px',
+        width: '100%',
+        backgroundColor: 'white'
+      }}>
+        <h1 style={{
+          fontSize: '32px',
+          fontWeight: 'bold',
+          paddingBottom: '24px',
+          textAlign: 'center'
+        }}>
+          Stoic Mentor
+        </h1>
+        
+        <MentorSwitcher />
+        
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          marginTop: '24px',
+          marginBottom: '24px',
+          backgroundColor: '#f9fafb',
+          padding: '16px',
+          borderRadius: '8px'
+        }}>
+          <div style={{
+            width: '60px',
+            height: '60px',
+            borderRadius: '50%',
+            overflow: 'hidden',
+            marginRight: '16px',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'flex-start',
+            backgroundColor: '#f3f4f6'
+          }}>
+            <img 
+              src={mentorImages[currentMentor]}
+              alt={mentorData.name}
+              style={{
+                width: '100%',
+                objectFit: 'contain',
+                objectPosition: 'top'
+              }}
+            />
+          </div>
+          <div>
+            <h2 style={{
+              fontSize: '24px',
+              fontWeight: 'bold',
+              marginBottom: '4px'
+            }}>
+              {mentorData.name}
+            </h2>
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+            }}>
+              {mentorData.title} • {mentorData.years}
+            </p>
+          </div>
         </div>
         
-        <div className="bg-white shadow rounded-lg p-6">
-          <ConversationUI />
-        </div>
+        <ConversationUI />
       </div>
     </AppLayout>
   );

@@ -82,7 +82,7 @@ const transcribeWithMockApi = async (audioBlob: Blob): Promise<string> => {
   const formData = new FormData();
   formData.append('audio', audioBlob, 'speech.wav');
 
-  const response = await fetch(`${API_ENDPOINTS.baseUrl}${API_ENDPOINTS.whisper}`, {
+  const response = await fetch(`${API_ENDPOINTS.baseUrl}${API_ENDPOINTS.transcribe}`, {
     method: 'POST',
     body: formData,
   });
