@@ -92,4 +92,16 @@ Components are designed to be modular and reusable:
 - Flask-CORS
 - NumPy
 - PyTorch
-- TorchAudio 
+- TorchAudio
+
+## UI Components
+
+### Core Components
+- **ConversationUI**: Main interface for the conversation experience
+- **TranscriptBox**: Displays user and mentor text with appropriate styling
+- **MentorSwitcher**: Component for selecting different stoic mentors
+- **MentorCallUI**: Manages the conversation flow with mentor selection
+
+### UI Components
+- **VoiceButton**: Interactive button for recording with visual feedback including state indicators (recording, processing, speaking) and animations
+- **WaveformVisualizer**: Visual representation of audio levels during recording and playback 

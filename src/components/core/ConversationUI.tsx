@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSessionStore } from '../../state/sessionStore';
 import { useMicStream } from '../../hooks/useMicStream';
 import WaveformVisualizer from '../UI/WaveformVisualizer';
+import VoiceButton from '../UI/VoiceButton';
 import TranscriptBox from './TranscriptBox';
 import { transcribeAudio, requestMicrophonePermission } from '../../services/whisperService';
 import { generateSpeech, playAudio, blobToBase64 } from '../../services/ttsService';
@@ -308,32 +309,31 @@ const ConversationUI: React.FC = () => {
         width={300}
       />
       
-      <div className="flex flex-col sm:flex-row gap-4">
-        <button
-          onClick={handleToggleRecording}
-          disabled={isProcessing || isSpeaking}
-          className={`px-6 py-3 rounded-full font-medium text-white ${
-            isRecording
-              ? 'bg-red-500 hover:bg-red-600'
-              : 'bg-blue-500 hover:bg-blue-600'
-          } disabled:opacity-50 disabled:cursor-not-allowed`}
-        >
-          {isRecording ? 'Stop' : 'Start'} Recording
-        </button>
+      <div className="flex flex-col sm:flex-row items-center gap-4">
+        <VoiceButton
+          isRecording={isRecording}
+          isProcessing={isProcessing}
+          isSpeaking={isSpeaking}
+          onToggleRecording={handleToggleRecording}
+          size="lg"
+          className="my-4"
+        />
         
-        <button
-          onClick={testMicrophonePermission}
-          className="px-4 py-2 rounded-full font-medium text-white bg-gray-500 hover:bg-gray-600"
-        >
-          Test Microphone
-        </button>
-        
-        <button
-          onClick={testDirectApiConnection}
-          className="px-4 py-2 rounded-full font-medium text-white bg-green-500 hover:bg-green-600"
-        >
-          Test API
-        </button>
+        <div className="flex flex-row gap-2">
+          <button
+            onClick={testMicrophonePermission}
+            className="px-4 py-2 rounded-full font-medium text-white bg-gray-500 hover:bg-gray-600"
+          >
+            Test Microphone
+          </button>
+          
+          <button
+            onClick={testDirectApiConnection}
+            className="px-4 py-2 rounded-full font-medium text-white bg-green-500 hover:bg-green-600"
+          >
+            Test API
+          </button>
+        </div>
       </div>
       
       {error && (
