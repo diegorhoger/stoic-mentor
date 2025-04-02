@@ -10,7 +10,7 @@ export const AUDIO_SETTINGS = {
 
 // API endpoints
 export const API_ENDPOINTS = {
-  baseUrl: 'http://localhost:5001',
+  baseUrl: import.meta.env.VITE_MOCK_API_URL || 'http://localhost:5001',
   whisper: '/api/transcribe',
   gpt: '/api/gpt',
   tts: '/api/tts',

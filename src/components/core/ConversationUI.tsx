@@ -94,7 +94,15 @@ const ConversationUI: React.FC = () => {
       
       // Transcribe audio to text
       console.log("Sending audio for transcription...");
-      const transcription = await transcribeAudio(audioBlob);
+      
+      // Create whisper options with prompt to help guide transcription
+      const transcriptionOptions = {
+        language: 'en',
+        prompt: 'This is a conversation about Stoic philosophy and philosophical guidance.',
+        temperature: 0.2 // Lower temperature for more accurate transcription
+      };
+      
+      const transcription = await transcribeAudio(audioBlob, transcriptionOptions);
       console.log("Received transcription:", transcription);
       setUserText(transcription);
       

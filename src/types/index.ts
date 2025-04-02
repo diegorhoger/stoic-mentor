@@ -32,4 +32,30 @@ export interface AudioState {
   isRecording: boolean;
   audioLevel: number;
   isPlaying: boolean;
+}
+
+// Whisper API types
+export interface WhisperApiResponse {
+  text: string;
+}
+
+export interface WhisperError {
+  error: {
+    message: string;
+    type: string;
+    param: string | null;
+    code: string;
+  };
+}
+
+export interface MockWhisperResponse {
+  transcription: string;
+  text?: string;
+}
+
+export interface TranscriptionOptions {
+  language?: string;
+  prompt?: string;
+  temperature?: number;
+  model?: string;
 } 

@@ -157,7 +157,7 @@ def text_to_speech():
 
 @app.route('/api/transcribe', methods=['POST'])
 def transcribe_audio():
-    """Returns a mock transcription."""
+    """Returns a mock transcription in a format similar to OpenAI's Whisper API."""
     try:
         # Check if file is in request
         if 'audio' not in request.files:
@@ -196,7 +196,13 @@ def transcribe_audio():
         # Clean up
         os.remove(filepath)
         
-        return jsonify({"transcription": transcription})
+        # Return in a format similar to Whisper API
+        # Whisper API returns: { "text": "..." }
+        # For backward compatibility we'll include both fields
+        return jsonify({
+            "text": transcription,
+            "transcription": transcription
+        })
         
     except Exception as e:
         print(f"[Mock] Error in transcribe_audio: {e}")
