@@ -34,6 +34,9 @@ export async function* streamChatCompletionWithOpenAI(
 ): AsyncGenerator<string> {
   const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
   
+  console.log('OpenAI API Key available for chat:', !!apiKey);
+  console.log('API Key first 10 chars:', apiKey ? apiKey.substring(0, 10) + '...' : 'No key');
+  
   if (!apiKey) {
     throw new Error('OpenAI API key is not configured. Please add VITE_OPENAI_API_KEY to your environment variables.');
   }
@@ -48,14 +51,30 @@ export async function* streamChatCompletionWithOpenAI(
 
   // Merge options with defaults
   const requestOptions = { ...defaultOptions, ...options };
+  console.log('OpenAI request options:', {
+    model: requestOptions.model,
+    temperature: requestOptions.temperature,
+    max_tokens: requestOptions.max_tokens,
+    stream: requestOptions.stream,
+  });
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    console.log('Making OpenAI Chat API request...');
+    
+    // Setup headers based on API key type
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      // Format according to the provided curl example
+      'Authorization': `Bearer ${apiKey}`,
+      'OpenAI-Organization': 'org-q2FnHJDFUAA89gSEDNw4uTgi',
+    };
+    
+    // Removing the OpenAI-Project header as it's causing authentication issues
+    console.log('Request headers - simplified version:', headers);
+    
+    const response = await fetch(`${API_ENDPOINTS.baseOpenAIUrl}${API_ENDPOINTS.chatEndpoint}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify({
         messages,
         ...requestOptions,
@@ -64,6 +83,7 @@ export async function* streamChatCompletionWithOpenAI(
 
     if (!response.ok) {
       const error = await response.json();
+      console.error('OpenAI API error response:', error);
       throw new Error(error.error?.message || 'Error generating chat completion');
     }
 
@@ -71,6 +91,7 @@ export async function* streamChatCompletionWithOpenAI(
       throw new Error('Response body is null');
     }
 
+    console.log('OpenAI API response received, starting to stream...');
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
@@ -79,6 +100,7 @@ export async function* streamChatCompletionWithOpenAI(
       const { done, value } = await reader.read();
       
       if (done) {
+        console.log('Stream complete');
         break;
       }
 
@@ -97,6 +119,7 @@ export async function* streamChatCompletionWithOpenAI(
           
           // Check for the end of the stream
           if (data === '[DONE]') {
+            console.log('Stream [DONE] marker received');
             return;
           }
 
@@ -107,7 +130,7 @@ export async function* streamChatCompletionWithOpenAI(
               yield content;
             }
           } catch (error) {
-            console.error('Error parsing JSON:', error);
+            console.error('Error parsing JSON from stream:', error, 'Line:', line);
           }
         }
       }
@@ -184,5 +207,9 @@ export function createSystemPrompt(mentorPrompt: string, conversationContext?: s
  * Determines if we should use direct OpenAI integration
  */
 export function useDirectOpenAI(): boolean {
-  return import.meta.env.VITE_USE_DIRECT_OPENAI === 'true';
+  const envValue = import.meta.env.VITE_USE_DIRECT_OPENAI;
+  const useDirectApi = envValue === 'true' || envValue === true;
+  console.log('Using direct OpenAI API:', useDirectApi);
+  console.log('ENV value type:', typeof envValue, 'value:', envValue);
+  return useDirectApi;
 } 

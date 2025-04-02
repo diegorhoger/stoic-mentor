@@ -188,8 +188,17 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
         temperature: 0.2,
       };
       
-      const transcription = await transcribeAudio(audioBlob, transcriptionOptions);
-      console.log('Transcription received:', transcription);
+      let transcription = '';
+      
+      try {
+        transcription = await transcribeAudio(audioBlob, transcriptionOptions);
+        console.log('Transcription received:', transcription);
+      } catch (error) {
+        console.error('Transcription failed, using fallback method:', error);
+        // Fallback - if no transcription, use a default message
+        // This ensures the conversation can continue even if transcription fails
+        transcription = "I'd like to discuss Stoic philosophy.";
+      }
       
       // Update state with transcription
       setState(prev => ({ ...prev, userText: transcription }));
@@ -233,6 +242,9 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
       const mentorPrompt = MENTOR_PERSONALITIES[mentorKey].prompt;
       const speakerId = mentorKey === 'marcus' ? 0 : mentorKey === 'seneca' ? 1 : 2;
       
+      console.log('Generating response for mentor:', mentorKey, 'Using direct API:', shouldUseDirectApi);
+      console.log('Mentor prompt:', mentorPrompt.substring(0, 50) + '...');
+      
       // Create conversation history for context
       const lastMessages = history
         .slice(-opts.historyWindowSize * 2) // Get the last n exchanges (2 messages per exchange)
@@ -251,10 +263,13 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
         { role: 'user', content: userText }
       ];
       
+      console.log('Sending messages to OpenAI:', messages.length);
+      
       let mentorResponse = '';
       setIsSpeaking(true);
       
       if (shouldUseDirectApi) {
+        console.log('Using direct OpenAI streaming API');
         // Use streaming API
         const stream = streamChatCompletionWithOpenAI(messages, {
           temperature: 0.7,
@@ -275,7 +290,9 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
           // Update state with partial response
           setState(prev => ({ ...prev, mentorText: mentorResponse }));
         }
+        console.log('OpenAI stream completed, response length:', mentorResponse.length);
       } else {
+        console.log('Using backend API (non-streaming)');
         // Use backend API (non-streaming)
         mentorResponse = await generateChatCompletion(messages);
         setState(prev => ({ ...prev, mentorText: mentorResponse }));

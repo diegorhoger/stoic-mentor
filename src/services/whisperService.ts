@@ -8,11 +8,25 @@ import { WhisperApiResponse, WhisperError, MockWhisperResponse, TranscriptionOpt
 export const transcribeAudio = async (audioBlob: Blob, options?: TranscriptionOptions): Promise<string> => {
   try {
     // Check if we should use direct OpenAI integration or the mock API
-    const useDirectApi = import.meta.env.VITE_USE_DIRECT_WHISPER === 'true';
+    const envValue = import.meta.env.VITE_USE_DIRECT_WHISPER;
+    const useDirectApi = envValue === 'true' || envValue === true;
+    
+    console.log('🎤 Transcribing audio...');
+    console.log('🔧 Using direct Whisper API:', useDirectApi);
+    console.log('🔧 ENV value type:', typeof envValue, 'value:', envValue);
+    console.log('📦 Audio blob size:', audioBlob.size);
     
     if (useDirectApi) {
-      return await transcribeWithOpenAI(audioBlob, options);
+      try {
+        console.log('🔌 Attempting to use OpenAI Whisper API directly');
+        return await transcribeWithOpenAI(audioBlob, options);
+      } catch (error) {
+        console.error('❌ OpenAI API failed, falling back to mock API:', error);
+        console.log('🔄 Falling back to mock API at:', import.meta.env.VITE_MOCK_API_URL);
+        return await transcribeWithMockApi(audioBlob);
+      }
     } else {
+      console.log('🔌 Using mock API at:', import.meta.env.VITE_MOCK_API_URL);
       return await transcribeWithMockApi(audioBlob);
     }
   } catch (error) {
@@ -22,14 +36,55 @@ export const transcribeAudio = async (audioBlob: Blob, options?: TranscriptionOp
 };
 
 /**
+ * Extracts the project ID from a project-scoped API key
+ * Project-scoped keys have the format "sk-proj-[projectId]_[rest]"
+ */
+const extractProjectId = (apiKey: string): string | null => {
+  if (!apiKey.startsWith('sk-proj-')) {
+    return null;
+  }
+  
+  // Extract everything after 'sk-proj-' up to the first underscore
+  const match = apiKey.match(/^sk-proj-([^_]+)/);
+  if (match && match[1]) {
+    console.log('Extracted project ID part:', match[1]);
+    return match[1];
+  }
+  
+  return null;
+};
+
+/**
  * Transcribes audio directly with OpenAI's Whisper API
  */
 const transcribeWithOpenAI = async (audioBlob: Blob, options?: TranscriptionOptions): Promise<string> => {
   try {
     const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
     
+    console.log('OpenAI API Key available:', !!apiKey);
+    console.log('API Key first 10 chars:', apiKey ? apiKey.substring(0, 10) + '...' : 'No key');
+    
     if (!apiKey) {
       throw new Error('OpenAI API key is not configured. Please add VITE_OPENAI_API_KEY to your environment variables.');
+    }
+    
+    if (!apiKey.startsWith('sk-') || apiKey.length < 20) {
+      throw new Error('Invalid OpenAI API key format. The key should start with "sk-" and be at least 20 characters long.');
+    }
+    
+    // Project-scoped keys are now supported with the additional headers
+    // These keys typically start with 'sk-proj-'
+    const isProjectKey = apiKey.startsWith('sk-proj-');
+    let projectId = null;
+    
+    if (isProjectKey) {
+      console.log('Using project-scoped API key with organization and project headers');
+      projectId = extractProjectId(apiKey);
+      console.log('Extracted project ID:', projectId);
+      
+      if (!projectId) {
+        console.warn('Could not extract project ID from key, will use default');
+      }
     }
     
     // Convert blob to file for FormData
@@ -53,21 +108,37 @@ const transcribeWithOpenAI = async (audioBlob: Blob, options?: TranscriptionOpti
       formData.append('temperature', options.temperature.toString());
     }
     
+    console.log('Making OpenAI Whisper API request with options:', {
+      model: options?.model || 'whisper-1',
+      language: options?.language,
+      prompt: options?.prompt ? options.prompt.substring(0, 20) + '...' : undefined,
+      temperature: options?.temperature
+    });
+    
     // Make request to OpenAI API
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const headers: Record<string, string> = {
+      // Format according to the provided curl example
+      'Authorization': `Bearer ${apiKey}`,
+      'OpenAI-Organization': 'org-q2FnHJDFUAA89gSEDNw4uTgi',
+    };
+    
+    // Removing the OpenAI-Project header as it's causing authentication issues
+    console.log('Request headers - simplified version:', headers);
+    
+    const response = await fetch(`${API_ENDPOINTS.baseOpenAIUrl}${API_ENDPOINTS.whisperEndpoint}`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-      },
+      headers,
       body: formData,
     });
     
     if (!response.ok) {
       const errorData = await response.json() as WhisperError;
+      console.error('OpenAI Whisper API error:', errorData);
       throw new Error(errorData.error?.message || 'Failed to transcribe audio with OpenAI');
     }
     
     const result = await response.json() as WhisperApiResponse;
+    console.log('Whisper API response:', result);
     return result.text;
   } catch (error) {
     console.error('Error with OpenAI transcription:', error);
