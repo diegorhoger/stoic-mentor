@@ -104,4 +104,18 @@ Components are designed to be modular and reusable:
 
 ### UI Components
 - **VoiceButton**: Interactive button for recording with visual feedback including state indicators (recording, processing, speaking) and animations
-- **WaveformVisualizer**: Visual representation of audio levels during recording and playback 
+- **WaveformVisualizer**: Visual representation of audio levels during recording and playback
+
+## Recent Changes
+
+### Removed Unused Root `/src` Directory
+
+**Change**: Removed the unused `/src` directory at the root level of the project.
+
+**Rationale**: The project had two separate source directories:
+1. `/stoic-mentor/src` - The active frontend application code
+2. `/src` - An empty or partially implemented directory at the root level
+
+After analysis, we determined that the root `/src` directory was not being used by any part of the application and contained only placeholder or incomplete code. All active development is properly contained within the `/stoic-mentor/src` directory for the frontend and the `/stoic-mentor/backend` directory for the API server.
+
+**Impact**: No functional impact to the application. This change simplifies the project structure and removes potential confusion about which source directory is actively used. 
