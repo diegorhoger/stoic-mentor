@@ -36,7 +36,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             color: '#a3a3a3',
             fontSize: '12px'
           }}>
-            © {new Date().getFullYear()} Stoic Voice Mentor
+            © {new Date().getFullYear()} <a href="https://mementomorilabs.com" style={{ color: '#666', textDecoration: 'none', fontWeight: 'bold' }} target="_blank" rel="noopener noreferrer">MEMENTO MORI Labs</a>
           </p>
         </footer>
       </div>

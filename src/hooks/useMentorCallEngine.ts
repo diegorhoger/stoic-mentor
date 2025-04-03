@@ -4,17 +4,17 @@ import { useSessionStore } from '../state/sessionStore';
 import { transcribeAudio } from '../services/whisperService';
 import { 
   createSystemPrompt, 
-  generateChatCompletion, 
   streamChatCompletionWithOpenAI, 
-  useDirectOpenAI,
+  sanitizeResponse,
   ChatMessage
 } from '../services/openaiService';
 import { 
-  generateSpeech, 
+  generateSpeech,
   playAudio
 } from '../services/ttsService';
+import { MentorKey, Mentor } from '../types';
+import { generateResponse } from '../services/api';
 import { MENTOR_PERSONALITIES } from '../constants/app';
-import { MentorKey } from '../types';
 
 export interface MentorCallOptions {
   enableVoiceActivity?: boolean;    // Enable voice activity detection for interruptions
@@ -40,6 +40,7 @@ export interface MentorCallState {
  * 4. Synthesize and play audio response
  */
 export function useMentorCallEngine(options: MentorCallOptions = {}) {
+  
   // Default options
   const defaultOptions: Required<MentorCallOptions> = {
     enableVoiceActivity: true,
@@ -81,7 +82,12 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
   });
   
   // Check if we should use direct OpenAI integration or backend API
-  const shouldUseDirectApi = useDirectOpenAI();
+  // Force direct API usage regardless of environment variable
+  const shouldUseDirectApi = true; // useDirectOpenAI();
+  console.log('🔍 Direct API check in useMentorCallEngine:');
+  console.log('🔍 shouldUseDirectApi:', shouldUseDirectApi);
+  console.log('🔍 Environment var:', import.meta.env.VITE_USE_DIRECT_OPENAI);
+  console.log('🔍 Environment var type:', typeof import.meta.env.VITE_USE_DIRECT_OPENAI);
   
   // Refs to maintain state between renders
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -180,8 +186,10 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
       // Create an abort controller for this operation
       abortControllerRef.current = new AbortController();
       
+      console.log('🔎 PROCESS AUDIO DEBUGGING - Starting processAudio function with blob size:', audioBlob.size);
+      
       // Transcribe audio to text
-      console.log('Transcribing audio...');
+      console.log('🔎 PROCESS AUDIO DEBUGGING - About to call transcribeAudio function');
       const transcriptionOptions = {
         language: 'en',
         prompt: 'This is a conversation about Stoic philosophy and philosophical guidance.',
@@ -192,16 +200,19 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
       
       try {
         transcription = await transcribeAudio(audioBlob, transcriptionOptions);
-        console.log('Transcription received:', transcription);
+        console.log('🔎 PROCESS AUDIO DEBUGGING - Transcription successful:', transcription);
+        console.log('🔎 PROCESS AUDIO DEBUGGING - Transcription length:', transcription.length);
       } catch (error) {
-        console.error('Transcription failed, using fallback method:', error);
+        console.error('🔎 PROCESS AUDIO DEBUGGING - Transcription failed, using fallback method:', error);
         // Fallback - if no transcription, use a default message
         // This ensures the conversation can continue even if transcription fails
         transcription = "I'd like to discuss Stoic philosophy.";
+        console.log('🔎 PROCESS AUDIO DEBUGGING - Using fallback transcription');
       }
       
       // Update state with transcription
       setState(prev => ({ ...prev, userText: transcription }));
+      console.log('🔎 PROCESS AUDIO DEBUGGING - Updated state with user text');
       
       // Add user message to history
       addMessage({
@@ -209,11 +220,199 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
         content: transcription,
         timestamp: Date.now(),
       });
+      console.log('🔎 PROCESS AUDIO DEBUGGING - Added user message to history');
+      
+      console.log('🔎 PROCESS AUDIO DEBUGGING - *** CRITICAL HANDOFF POINT ***');
+      console.log('🔎 PROCESS AUDIO DEBUGGING - About to call generateMentorResponse with text:', transcription);
       
       // Generate mentor response
-      await generateMentorResponse(transcription);
+      console.log('🔎 PROCESS AUDIO DEBUGGING - Calling generateMentorResponse now');
+      
+      // INLINE DEFINITION OF generateMentorResponse - This ensures we always use the current value of currentMentor
+      // ============================================================================================
+      // Get the latest mentor information directly from the store
+      const sessionState = useSessionStore.getState(); 
+      const mentorKey = sessionState.currentMentor as MentorKey;
+      console.log(`🔍 CRITICAL DEBUG - Using mentor key from store: ${mentorKey}`);
+      
+      if (!transcription) {
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Empty text, skipping`);
+        return;
+      }
+
+      if (isGeneratingResponseRef.current) {
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Already generating, skipping`);
+        return;
+      }
+
+      try {
+        isGeneratingResponseRef.current = true;
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Set isGeneratingResponse = true`);
+        
+        // Force checking current mentor from the store again
+        const freshSessionState = useSessionStore.getState();
+        const freshMentorKey = freshSessionState.currentMentor as MentorKey;
+        console.log(`🔍 CRITICAL DEBUG - Double-checked mentor key: ${freshMentorKey}`);
+        
+        // Get the full mentor name and details from the constants
+        const mentorDetails = MENTOR_PERSONALITIES[freshMentorKey];
+        if (!mentorDetails) {
+          console.error(`🔍 FLOW TRACE [generateMentorResponse] - Invalid mentor key: ${freshMentorKey}`);
+          return;
+        }
+        
+        const mentorName = mentorDetails.name; // This will be the full name like "Marcus Aurelius"
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Selected mentor key: ${freshMentorKey}, full name: ${mentorName}`);
+
+        if (!freshMentorKey) {
+          console.error(`🔍 FLOW TRACE [generateMentorResponse] - No mentor selected!`);
+          return;
+        }
+
+        setIsSpeaking(true);
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Set isSpeaking = true`);
+
+        // Record user message
+        const userMessage: ChatMessage = {
+          role: 'user',
+          content: transcription,
+        };
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Created user message: ${userMessage.content.substring(0, 30)}...`);
+
+        // Note: The user message was already added to the history earlier in the processAudio function
+        // We don't need to add it again to avoid duplicates
+        // Comment out or remove the duplicate addMessage call:
+        // addMessage({
+        //   role: 'user',
+        //   content: transcription,
+        //   timestamp: Date.now(),
+        // });
+        // console.log(`🔍 FLOW TRACE [generateMentorResponse] - Added user message to messages state`);
+
+        let mentorResponseContent = '';
+
+        // Now we can pass the full mentor name to createSystemPrompt
+        const systemPrompt = createSystemPrompt(mentorName);
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Created system prompt: ${systemPrompt.substring(0, 50)}...`);
+
+        const conversationHistory: ChatMessage[] = history
+          .slice(-opts.historyWindowSize * 2) // Get the last n exchanges (2 messages per exchange)
+          .map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          }));
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Conversation history length: ${conversationHistory.length}`);
+
+        if (shouldUseDirectApi) {
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Using Direct API (shouldUseDirectApi=true)`);
+          try {
+            // Use the full mentor name from MENTOR_PERSONALITIES
+            const mentorObject = { 
+              name: mentorName
+            };
+            
+            console.log(`🔍 FLOW TRACE [generateMentorResponse] - Using mentor object:`, mentorObject);
+            
+            // Extract conversation history as string array for the API
+            // Make sure we use the current mentor name in the conversation history, not old ones
+            const conversationHistoryStrings = conversationHistory.map(msg => {
+              if (msg.role === 'user') {
+                return `User: ${msg.content}`;
+              } else {
+                // Ensure assistant messages are attributed to the current mentor
+                return `${mentorName}: ${msg.content}`;
+              }
+            });
+            
+            console.log(`🔍 FLOW TRACE [generateMentorResponse] - Formatted conversation history with current mentor name: ${mentorName}`);
+            
+            // Using API with conversation history
+            mentorResponseContent = await generateResponse(transcription, mentorObject, conversationHistoryStrings);
+            console.log(`🔍 FLOW TRACE [generateMentorResponse] - Received response from generateResponse, length: ${mentorResponseContent.length}`);
+            console.log(`🔍 FLOW TRACE [generateMentorResponse] - Response content (first 100 chars): "${mentorResponseContent.substring(0, 100)}..."`);
+          } catch (error) {
+            console.error(`🔍 FLOW TRACE [generateMentorResponse] - Error from generateResponse:`, error);
+          }
+        } else {
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Using Streaming API (shouldUseDirectApi=false)`);
+          // Using streaming API
+          const allMessages: ChatMessage[] = [
+            { role: 'system', content: systemPrompt },
+            ...conversationHistory,
+            userMessage,
+          ];
+
+          try {
+            const stream = streamChatCompletionWithOpenAI(allMessages, {
+              temperature: 0.7,
+              model: 'gpt-4',
+            });
+
+            if (stream) {
+              await stream.closed;
+              console.log(`🔍 FLOW TRACE [generateMentorResponse] - Stream closed successfully`);
+            } else {
+              console.error(`🔍 FLOW TRACE [generateMentorResponse] - No stream returned from streamChatCompletionWithOpenAI`);
+            }
+          } catch (error) {
+            console.error(`🔍 FLOW TRACE [generateMentorResponse] - Error in streaming response:`, error);
+          }
+        }
+
+        if (shouldUseDirectApi && mentorResponseContent) {
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Processing direct API response`);
+          // If we received a mentor response from the direct API, add it to messages
+          const mentorMessage: ChatMessage = {
+            role: 'assistant',
+            content: mentorResponseContent,
+            timestamp: Date.now(),
+          };
+
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Created mentor message: ${mentorMessage.content.substring(0, 100)}...`);
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Message content BEFORE sanitization: "${mentorMessage.content.substring(0, 100)}..."`);
+          
+          // Apply sanitization again as a safety measure
+          mentorMessage.content = sanitizeResponse(mentorMessage.content);
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Message content AFTER sanitization: "${mentorMessage.content.substring(0, 100)}..."`);
+          
+          // Check for acknowledgment phrases that might have survived
+          if (hasAcknowledgmentPhrases(mentorMessage.content)) {
+            console.error(`🔍 FLOW TRACE [generateMentorResponse] - ⚠️ WARNING: Acknowledgment phrases detected after sanitization!`);
+          }
+          
+          addMessage(mentorMessage);
+          console.log(`🔍 FLOW TRACE [generateMentorResponse] - Added mentor message to messages state`);
+
+          // Generate audio for the mentor's response
+          if (mentorResponseContent) {
+            console.log(`🔍 FLOW TRACE [generateMentorResponse] - Generating audio for response`);
+            
+            // Map mentor to correct speaker ID
+            const speakerId = freshMentorKey === 'marcus' ? 0 : freshMentorKey === 'seneca' ? 1 : 2;
+            console.log(`🔍 FLOW TRACE [generateMentorResponse] - Using speaker ID: ${speakerId} for ${freshMentorKey}`);
+            
+            const audioBlob = await generateSpeech(mentorResponseContent, speakerId, []);
+            if (audioBlob) {
+              console.log(`🔍 FLOW TRACE [generateMentorResponse] - Audio generated successfully: ${audioBlob.size} bytes`);
+              await playAudio(audioBlob);
+              console.log(`🔍 FLOW TRACE [generateMentorResponse] - Audio played successfully`);
+            } else {
+              console.error(`🔍 FLOW TRACE [generateMentorResponse] - Failed to generate audio`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`🔍 FLOW TRACE [generateMentorResponse] - Unhandled error:`, error);
+      } finally {
+        isGeneratingResponseRef.current = false;
+        setIsSpeaking(false);
+        console.log(`🔍 FLOW TRACE [generateMentorResponse] - Reset isGeneratingResponse and isSpeaking to false`);
+      }
+      // ============================================================================================
+      
+      console.log('🔎 PROCESS AUDIO DEBUGGING - Returned from generateMentorResponse');
     } catch (error) {
-      console.error('Error processing audio:', error);
+      console.error('🔎 PROCESS AUDIO DEBUGGING - Unhandled error in processAudio:', error);
       setState(prev => ({
         ...prev,
         isProcessing: false,
@@ -223,163 +422,26 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
           : 'Failed to process audio',
       }));
     }
-  }, [addMessage]);
+  }, [addMessage, history, opts.historyWindowSize, setIsSpeaking, shouldUseDirectApi]);
   
-  // Generate mentor response
-  const generateMentorResponse = useCallback(async (userText: string) => {
-    try {
-      // Don't generate a response if user text is empty
-      if (!userText.trim()) {
-        setState(prev => ({ ...prev, isProcessing: false }));
-        return;
-      }
-      
-      // Set flag to indicate we're generating a response
-      isGeneratingResponseRef.current = true;
-      
-      // Get mentor persona details
-      const mentorKey = currentMentor as MentorKey;
-      const mentorPrompt = MENTOR_PERSONALITIES[mentorKey].prompt;
-      const speakerId = mentorKey === 'marcus' ? 0 : mentorKey === 'seneca' ? 1 : 2;
-      
-      console.log('Generating response for mentor:', mentorKey, 'Using direct API:', shouldUseDirectApi);
-      console.log('Mentor prompt:', mentorPrompt.substring(0, 50) + '...');
-      
-      // Create conversation history for context
-      const lastMessages = history
-        .slice(-opts.historyWindowSize * 2) // Get the last n exchanges (2 messages per exchange)
-        .map(msg => ({
-          role: msg.role === 'user' ? 'user' : 'assistant',
-          content: msg.content
-        })) as ChatMessage[];
-      
-      // Create system prompt
-      const systemPrompt = createSystemPrompt(mentorPrompt);
-      
-      // Prepare messages for OpenAI
-      const messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...lastMessages,
-        { role: 'user', content: userText }
-      ];
-      
-      console.log('Sending messages to OpenAI:', messages.length);
-      
-      let mentorResponse = '';
-      setIsSpeaking(true);
-      
-      if (shouldUseDirectApi) {
-        console.log('Using direct OpenAI streaming API');
-        // Use streaming API
-        const stream = streamChatCompletionWithOpenAI(messages, {
-          temperature: 0.7,
-          model: 'gpt-4',
-        });
-        
-        // Process the stream
-        for await (const chunk of stream) {
-          // Check if the user has interrupted
-          if (abortControllerRef.current?.signal.aborted) {
-            console.log('Response generation aborted by user');
-            break;
-          }
-          
-          // Append chunk to response
-          mentorResponse += chunk;
-          
-          // Update state with partial response
-          setState(prev => ({ ...prev, mentorText: mentorResponse }));
-        }
-        console.log('OpenAI stream completed, response length:', mentorResponse.length);
-      } else {
-        console.log('Using backend API (non-streaming)');
-        // Use backend API (non-streaming)
-        mentorResponse = await generateChatCompletion(messages);
-        setState(prev => ({ ...prev, mentorText: mentorResponse }));
-      }
-      
-      // Add mentor message to history
-      addMessage({
-        role: 'mentor',
-        content: mentorResponse,
-        timestamp: Date.now(),
-      });
-      
-      // Generate and play audio
-      await generateAndPlayAudio(mentorResponse, speakerId);
-      
-      // Reset flag
-      isGeneratingResponseRef.current = false;
-      setState(prev => ({ ...prev, isProcessing: false }));
-    } catch (error) {
-      console.error('Error generating mentor response:', error);
-      setState(prev => ({
-        ...prev,
-        isProcessing: false,
-        isError: true,
-        errorMessage: error instanceof Error 
-          ? error.message 
-          : 'Failed to generate mentor response',
-      }));
-      
-      // Reset flags
-      isGeneratingResponseRef.current = false;
-      setIsSpeaking(false);
-    }
-  }, [currentMentor, history, addMessage, setIsSpeaking, opts.historyWindowSize, shouldUseDirectApi]);
-  
-  // Generate and play audio response
-  const generateAndPlayAudio = useCallback(async (text: string, speakerId: number) => {
-    try {
-      // Set flag to indicate we're streaming TTS
-      isStreamingTTSRef.current = true;
-      
-      // Prepare context for continuity of voice
-      const context = await Promise.all(
-        history
-          .filter(msg => msg.role === 'mentor')
-          .slice(-3) // Only use last 3 mentor messages for context
-          .map(async (msg) => {
-            // In a real implementation, we'd have the audio data stored with the message
-            // For now, we'll use placeholder base64 data
-            return {
-              text: msg.content,
-              speaker: speakerId,
-              audio: 'placeholder-base64-audio' // This would be real audio data in production
-            };
-          })
-      );
-      
-      // Generate speech audio
-      const audioBlob = await generateSpeech(text, speakerId, context);
-      
-      // Play the audio
-      await playAudio(audioBlob);
-      
-      // Reset speaking state when audio finishes
-      setIsSpeaking(false);
-      
-      // Reset flag
-      isStreamingTTSRef.current = false;
-    } catch (error) {
-      console.error('Error generating and playing audio:', error);
-      setIsSpeaking(false);
-      
-      // Reset flag
-      isStreamingTTSRef.current = false;
-      
-      // Only report the error if we're not aborting intentionally
-      if (!abortControllerRef.current?.signal.aborted) {
-        setState(prev => ({
-          ...prev,
-          isError: true,
-          errorMessage: error instanceof Error 
-            ? error.message 
-            : 'Failed to generate speech',
-        }));
-      }
-    }
-  }, [history, setIsSpeaking]);
+  // Helper function to detect acknowledgment phrases
+  const hasAcknowledgmentPhrases = (text: string): boolean => {
+    const lowerText = text.toLowerCase();
+    const phrases = [
+      "i understand what you're saying",
+      "i understand what you are saying",
+      "i see what you're saying",
+      "i see what you are saying",
+      "i understand your question",
+      "let me think about that",
+      "i appreciate your question",
+      "thank you for your question",
+      "i understand you're asking",
+      "i understand you are asking"
+    ];
+    
+    return phrases.some(phrase => lowerText.includes(phrase));
+  };
   
   // Toggle listening (start/stop)
   const toggleListening = useCallback(async () => {
@@ -421,6 +483,49 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
     
     return cleanupResources;
   }, [opts.autoStart, startListening, cleanupResources]);
+  
+  // Log and respond to mentor changes
+  useEffect(() => {
+    console.log(`🔍 MENTOR CHANGE DETECTED - Current mentor is now: ${currentMentor}`);
+    
+    // Reset state when mentor changes to ensure fresh conversations
+    setState(prev => ({
+      ...prev,
+      userText: '',
+      mentorText: '',
+      isError: false,
+      errorMessage: null,
+    }));
+    
+    // Abort any ongoing operations
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
+    // Reset flags
+    isGeneratingResponseRef.current = false;
+    isStreamingTTSRef.current = false;
+    
+  }, [currentMentor]);
+  
+  // Listen for custom mentor-changed events
+  useEffect(() => {
+    const handleMentorChanged = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const newMentor = customEvent.detail?.mentor;
+      console.log(`🔍 MENTOR-CHANGED EVENT - Detected mentor change to: ${newMentor}`);
+      
+      // Force check against the store
+      const storeState = useSessionStore.getState();
+      console.log(`🔍 MENTOR-CHANGED EVENT - Current store state has mentor: ${storeState.currentMentor}`);
+    };
+    
+    window.addEventListener('mentor-changed', handleMentorChanged);
+    
+    return () => {
+      window.removeEventListener('mentor-changed', handleMentorChanged);
+    };
+  }, []);
   
   // Return the API
   return {

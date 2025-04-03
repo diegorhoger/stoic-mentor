@@ -1,139 +1,124 @@
 import React, { useState, useEffect } from 'react';
 import { useSessionStore } from '../../state/sessionStore';
-import { useMicStream } from '../../hooks/useMicStream';
+import { useMentorCallEngine } from '../../hooks/useMentorCallEngine';
 import WaveformVisualizer from '../UI/WaveformVisualizer';
-import { MENTOR_PERSONALITIES } from '../../constants/app';
-import { transcribeAudio, generateResponse, generateAudio } from '../../services/api';
-import { MentorKey } from '../../types';
 
 const MentorCallUI: React.FC = () => {
-  const { currentMentor, isSpeaking, isListening, setIsSpeaking, setIsListening, addMessage } = useSessionStore();
-  const { isRecording, audioLevel, startRecording, stopRecording, getAudioBlob } = useMicStream();
-  const [isProcessing, setIsProcessing] = useState(false);
+  const { isSpeaking, history } = useSessionStore();
   const [error, setError] = useState<string | null>(null);
+  
+  // Use the mentor call engine hook instead of direct API calls
+  const {
+    audioLevel,
+    isRecording,
+    toggleListening,
+    isError,
+    errorMessage
+  } = useMentorCallEngine();
 
   // Handle recording state changes
   useEffect(() => {
-    if (isRecording) {
-      setIsListening(true);
+    if (isError && errorMessage) {
+      setError(errorMessage);
     } else {
-      setIsListening(false);
+      setError(null);
     }
-  }, [isRecording, setIsListening]);
-
-  // Toggle recording
-  const toggleRecording = async () => {
-    try {
-      if (isRecording) {
-        stopRecording();
-      } else {
-        await startRecording();
-      }
-    } catch (err) {
-      setError('Failed to access microphone. Please check permissions.');
-      console.error(err);
-    }
-  };
-
-  // Process audio when recording stops
-  const processAudio = async () => {
-    if (isProcessing) return;
-    
-    setIsProcessing(true);
-    setError(null);
-    
-    try {
-      // Get recorded audio
-      const audioBlob = await getAudioBlob();
-      if (!audioBlob) {
-        throw new Error('No audio recorded');
-      }
-      
-      // Transcribe audio to text
-      const transcription = await transcribeAudio(audioBlob);
-      
-      // Add user message to history
-      addMessage({
-        role: 'user',
-        content: transcription,
-        timestamp: Date.now(),
-      });
-      
-      // Generate mentor response
-      const mentorPrompt = MENTOR_PERSONALITIES[currentMentor as MentorKey].prompt;
-      const response = await generateResponse(transcription, mentorPrompt);
-      
-      // Add mentor message to history
-      addMessage({
-        role: 'mentor',
-        content: response,
-        timestamp: Date.now(),
-      });
-      
-      // Generate and play audio
-      setIsSpeaking(true);
-      const voiceId = MENTOR_PERSONALITIES[currentMentor as MentorKey].voiceId;
-      const audioResponse = await generateAudio(response, voiceId);
-      
-      // Play the audio (placeholder - actual implementation would use Web Audio API)
-      const audioUrl = URL.createObjectURL(audioResponse);
-      const audio = new Audio(audioUrl);
-      
-      audio.onended = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-      
-      audio.play().catch(err => {
-        console.error('Error playing audio:', err);
-        setIsSpeaking(false);
-      });
-      
-    } catch (err) {
-      setError('Error processing audio. Please try again.');
-      console.error(err);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  // Process audio when recording stops
-  useEffect(() => {
-    if (!isRecording && !isProcessing) {
-      processAudio();
-    }
-  }, [isRecording]);
+  }, [isError, errorMessage]);
 
   return (
-    <div className="flex flex-col items-center space-y-6 p-6">
-      <div className="text-center">
-        <h2 className="text-2xl font-bold mb-2">
-          {MENTOR_PERSONALITIES[currentMentor as MentorKey].name}
-        </h2>
-        <p className="text-gray-600">
-          {isListening ? 'Listening...' : isSpeaking ? 'Speaking...' : 'Click to speak'}
-        </p>
+    <div className="flex flex-col items-center w-full max-w-2xl mx-auto space-y-2 p-6">
+      {/* Conversation Display */}
+      <div style={{ 
+        border: '1px solid #e5e7eb', 
+        borderRadius: '8px', 
+        padding: '16px', 
+        marginBottom: '8px',
+        minHeight: '200px',
+        backgroundColor: 'white',
+        width: '100%',
+        maxWidth: '600px'
+      }}>
+        {/* Show conversation history */}
+        {history.length > 0 ? (
+          // Display all messages in the history array
+          history.map((message, index) => (
+            <div 
+              key={message.timestamp || index} 
+              style={{ 
+                marginBottom: '16px',
+                display: 'flex',
+                justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start'
+              }}
+            >
+              <div style={{ 
+                backgroundColor: message.role === 'user' ? '#e9ecef' : '#f8f9fa', 
+                borderRadius: message.role === 'user' ? '12px 12px 0 12px' : '12px 12px 12px 0',
+                padding: '10px 14px',
+                maxWidth: '80%',
+                border: message.role === 'user' ? 'none' : '1px solid #e9ecef'
+              }}>
+                {message.content}
+              </div>
+            </div>
+          ))
+        ) : (
+          <div style={{ 
+            color: '#9ca3af', 
+            textAlign: 'center',
+            marginTop: '40px'
+          }}>
+            Ask me something about stoicism...
+          </div>
+        )}
       </div>
       
-      <WaveformVisualizer
-        audioLevel={audioLevel}
-        isActive={isRecording || isSpeaking}
-        color={isRecording ? '#EF4444' : '#4F46E5'}
-        height={100}
-        width={300}
-      />
-      
-      <button
-        onClick={toggleRecording}
-        disabled={isProcessing || isSpeaking}
-        className={`px-6 py-3 rounded-full font-medium text-white ${
-          isRecording
-            ? 'bg-red-500 hover:bg-red-600'
-            : 'bg-blue-500 hover:bg-blue-600'
-        } disabled:opacity-50 disabled:cursor-not-allowed`}
-      >
-        {isRecording ? 'Stop' : 'Start'} Recording
-      </button>
+      <div className="flex flex-col items-center w-full">
+        <WaveformVisualizer
+          audioLevel={audioLevel}
+          isActive={isRecording || isSpeaking}
+          color={isRecording ? '#EF4444' : '#4F46E5'}
+          height={80}
+          width={300}
+        />
+        
+        <button
+          onClick={toggleListening}
+          disabled={isSpeaking}
+          style={{
+            padding: '12px 24px',
+            backgroundColor: isRecording ? '#EF4444' : '#4F46E5',
+            color: 'white',
+            borderRadius: '24px',
+            fontWeight: 'bold',
+            border: 'none',
+            cursor: isSpeaking ? 'not-allowed' : 'pointer',
+            opacity: isSpeaking ? 0.7 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            margin: '10px auto'
+          }}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 14C13.66 14 15 12.66 15 11V5C15 3.34 13.66 2 12 2C10.34 2 9 3.34 9 5V11C9 12.66 10.34 14 12 14Z"
+              fill="currentColor"
+            />
+            <path
+              d="M17 11C17 13.76 14.76 16 12 16C9.24 16 7 13.76 7 11H5C5 14.53 7.61 17.43 11 17.92V21H13V17.92C16.39 17.43 19 14.53 19 11H17Z"
+              fill="currentColor"
+            />
+          </svg>
+          {isRecording ? 'Stop Recording' : isSpeaking ? 'Wait for Response...' : 'Ask a question'}
+        </button>
+      </div>
       
       {error && (
         <div className="text-red-500 text-center mt-4">

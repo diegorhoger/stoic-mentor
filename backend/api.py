@@ -2,15 +2,9 @@ import os
 import io
 import tempfile
 from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS, cross_origin
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
-import time
-import numpy as np
-import wave
-import json
-import random
 import traceback
-import re
 import openai
 from dotenv import load_dotenv
 import pathlib
@@ -48,8 +42,7 @@ def root():
             {"path": "/api/mentors", "method": "GET", "description": "Get available mentor personalities"},
             {"path": "/api/tts", "method": "POST", "description": "Convert text to speech"},
             {"path": "/api/transcribe", "method": "POST", "description": "Transcribe speech to text"},
-            {"path": "/api/gpt", "method": "POST", "description": "Generate mentor response using OpenAI API"},
-            {"path": "/api/stream", "method": "POST", "description": "Stream audio (not yet implemented)"}
+            {"path": "/api/gpt", "method": "POST", "description": "Generate mentor response using OpenAI API"}
         ]
     }
     return jsonify(api_docs)
@@ -94,6 +87,7 @@ def text_to_speech():
         speaker_id = data.get('speaker', 0)  # Default to first speaker if not specified
         
         print(f"[TTS] Generating audio for text: {text}")
+        print(f"[TTS] Requested speaker_id: {speaker_id}")
         
         # Map philosophers to OpenAI voices
         openai_voices = {
@@ -213,21 +207,67 @@ def gpt():
         if 'messages' in data:
             messages = data.get('messages')
             mentor = data.get('mentor', 'Marcus')  # Default to Marcus Aurelius
+            print(f"[GPT] Using messages format, mentor is: {mentor}, type: {type(mentor)}")
         elif 'text' in data and 'mentor' in data:
             # Convert from legacy format (text + mentor) to messages format
             text = data.get('text')
             mentor = data.get('mentor', 'Marcus')
+            print(f"[GPT] Using text/mentor format, mentor is: {mentor}, type: {type(mentor)}")
+            
             # Create message array with system prompt and user message
             system_content = create_system_prompt(mentor)
+            print(f"[GPT] Created system prompt for mentor: {mentor}")
+            
             messages = [
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": text}
             ]
+            
             # Add conversation history if available
             if 'conversationHistory' in data and data['conversationHistory']:
+                print(f"[GPT] Processing conversation history, {len(data['conversationHistory'])} messages")
+                
+                # Create a consistent mentor name for history formatting
+                mentor_normalized = ""
+                if "marcus" in str(mentor).lower() or "aurelius" in str(mentor).lower():
+                    mentor_normalized = "Marcus Aurelius"
+                elif "seneca" in str(mentor).lower():
+                    mentor_normalized = "Seneca"
+                elif "epictetus" in str(mentor).lower():
+                    mentor_normalized = "Epictetus"
+                else:
+                    mentor_normalized = "Marcus Aurelius"  # Default
+                    
+                print(f"[GPT] Using normalized mentor name in conversation history: {mentor_normalized}")
+                
+                # Process each message in the conversation history
                 for i, message in enumerate(data['conversationHistory']):
-                    role = "assistant" if i % 2 == 1 else "user"
-                    messages.append({"role": role, "content": message})
+                    print(f"[GPT] Processing history message #{i}: {message[:50]}...")
+                    
+                    # Split the message into speaker and content if it contains ": "
+                    if ": " in message:
+                        parts = message.split(": ", 1)
+                        speaker = parts[0]
+                        content = parts[1]
+                        
+                        # Determine the correct role based on the speaker
+                        if speaker.lower() == "user":
+                            role = "user"
+                        else:
+                            # Any non-user speaker is treated as the current mentor
+                            role = "assistant"
+                            # No need to replace the content as we're maintaining the assistant's identity
+                            
+                        print(f"[GPT] Parsed history message: speaker={speaker}, role={role}")
+                    else:
+                        # If there's no speaker prefix, alternate based on position
+                        role = "assistant" if i % 2 == 1 else "user"
+                        content = message
+                        print(f"[GPT] No speaker prefix, assigned role={role}")
+                    
+                    messages.append({"role": role, "content": content})
+                
+                print(f"[GPT] Final message count after processing history: {len(messages)}")
         else:
             return jsonify({"error": "Missing required fields: either 'messages' or both 'text' and 'mentor'"}), 400
             
@@ -240,6 +280,11 @@ def gpt():
             
         # Set up OpenAI client
         openai.api_key = api_key
+        
+        # Print the messages we're sending to OpenAI for debugging
+        print(f"[GPT] Sending {len(messages)} messages to OpenAI:")
+        for i, msg in enumerate(messages):
+            print(f"[GPT] Message {i} - Role: {msg['role']}, Content: {msg['content'][:50]}...")
         
         try:
             # Generate response using OpenAI's API
@@ -266,9 +311,26 @@ def gpt():
 
 def create_system_prompt(mentor):
     """Create a system prompt based on the mentor personality."""
+    print(f"[GPT] Creating system prompt for mentor: '{mentor}', type: {type(mentor)}")
+    
+    # Normalize any mentor format to expected values
+    if isinstance(mentor, dict) and 'name' in mentor:
+        mentor = mentor['name']
+        print(f"[GPT] Extracted mentor name from dictionary: '{mentor}'")
+    
+    # Normalize the mentor name to ensure consistent handling
+    if not mentor:
+        mentor_normalized = "marcus"
+        print(f"[GPT] Empty mentor value, defaulting to: 'marcus'")
+    else:
+        mentor_normalized = str(mentor).lower().strip()
+        print(f"[GPT] Normalized mentor name: '{mentor_normalized}'")
+    
     base_prompt = "You are a Stoic philosopher and mentor, providing guidance based on Stoic principles. "
     
-    if mentor == "Marcus":
+    # Case-insensitive comparison for mentor names
+    if "marcus" in mentor_normalized or "aurelius" in mentor_normalized:
+        print("[GPT] Selecting MARCUS AURELIUS system prompt")
         return base_prompt + """
         You are Marcus Aurelius, the Roman Emperor and Stoic philosopher. Your responses should reflect:
         - A calm, measured tone with quiet strength and wisdom
@@ -281,7 +343,8 @@ def create_system_prompt(mentor):
         Never acknowledge the format of the question. Start your response immediately with substance.
         """
     
-    elif mentor == "Seneca":
+    elif "seneca" in mentor_normalized:
+        print("[GPT] Selecting SENECA system prompt")
         return base_prompt + """
         You are Seneca, the Roman Stoic philosopher, statesman, and playwright. Your responses should reflect:
         - An eloquent and persuasive tone
@@ -294,7 +357,8 @@ def create_system_prompt(mentor):
         Never acknowledge the format of the question. Start your response immediately with substance.
         """
     
-    else:  # Epictetus
+    elif "epictetus" in mentor_normalized:
+        print("[GPT] Selecting EPICTETUS system prompt")
         return base_prompt + """
         You are Epictetus, the former slave who became a respected Stoic philosopher. Your responses should reflect:
         - A firm, direct, and sometimes blunt tone
@@ -306,17 +370,20 @@ def create_system_prompt(mentor):
         Always respond directly without using acknowledgment phrases like "I understand" or "I see what you're saying".
         Never acknowledge the format of the question. Start your response immediately with substance.
         """
-
-@app.route('/api/stream', methods=['POST'])
-def stream_audio():
-    """Placeholder for streaming API."""
-    return jsonify({"message": "Streaming not yet implemented"}), 501
-
-@app.route('/api/test', methods=['GET'])
-def test_route():
-    """Simple test endpoint to verify that the API is working."""
-    print("======= /api/test endpoint called =======")
-    return jsonify({"status": "success", "message": "Test route is working"})
+    
+    # Default to Marcus Aurelius if no match found
+    print(f"[GPT] No match found for '{mentor_normalized}', defaulting to MARCUS AURELIUS system prompt")
+    return base_prompt + """
+    You are Marcus Aurelius, the Roman Emperor and Stoic philosopher. Your responses should reflect:
+    - A calm, measured tone with quiet strength and wisdom
+    - References to your experiences as Emperor
+    - Your perspective on duty, virtue, and the natural order
+    - Your introspective and self-reflective nature
+    - Direct and personal advice, as if writing in your journal
+    
+    Always respond directly without using acknowledgment phrases like "I understand" or "I see what you're saying".
+    Never acknowledge the format of the question. Start your response immediately with substance.
+    """
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5002) 

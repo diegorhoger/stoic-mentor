@@ -4,6 +4,9 @@ import { useMicStream } from '../../hooks/useMicStream';
 import { transcribeAudio, requestMicrophonePermission } from '../../services/whisperService';
 import { generateSpeech, playAudio, blobToBase64 } from '../../services/ttsService';
 import { checkApiHealth } from '../../services/mentorService';
+import { generateResponse } from '../../services/api';
+import { sanitizeResponse } from '../../services/openaiService';
+import { Mentor } from '../../types';
 
 const ConversationUI: React.FC = () => {
   // Global state
@@ -15,6 +18,23 @@ const ConversationUI: React.FC = () => {
     addMessage, 
     history 
   } = useSessionStore();
+  
+  // Force re-initialize component when mentor changes
+  const [mentorKey, setMentorKey] = useState(currentMentor);
+  
+  // Update mentorKey when currentMentor changes
+  useEffect(() => {
+    if (mentorKey !== currentMentor) {
+      console.log(`🔍 CONVERSATION UI - Mentor changed from ${mentorKey} to ${currentMentor}, reinitializing...`);
+      setMentorKey(currentMentor);
+      
+      // Reset conversation state
+      setUserText('');
+      setMentorText('');
+      setError(null);
+      setIsProcessing(false);
+    }
+  }, [currentMentor]);
   
   // Local state
   const { isRecording, startRecording, stopRecording, getAudioBlob } = useMicStream();
@@ -100,6 +120,16 @@ const ConversationUI: React.FC = () => {
         timestamp: Date.now(),
       });
       
+      // Get the current mentor from the store to ensure we have the latest value
+      const currentState = useSessionStore.getState();
+      const latestMentor = currentState.currentMentor;
+      console.log(`🔍 CONVERSATION UI - Processing audio for mentor: ${latestMentor} (verifying it matches UI state: ${currentMentor})`);
+      
+      // If there's a mismatch, log it but continue with the store value
+      if (latestMentor !== currentMentor) {
+        console.warn(`🔍 CONVERSATION UI - WARNING: Current mentor in UI (${currentMentor}) does not match store (${latestMentor})`);
+      }
+      
       // Convert previous responses to context
       const context = await Promise.all(
         history
@@ -108,7 +138,7 @@ const ConversationUI: React.FC = () => {
           .map(async (msg) => {
             return {
               text: msg.content,
-              speaker: currentMentor === 'marcus' ? 0 : currentMentor === 'seneca' ? 1 : 2,
+              speaker: latestMentor === 'marcus' ? 0 : latestMentor === 'seneca' ? 1 : 2,
               audio: 'base64audio'
             };
           })
@@ -117,28 +147,47 @@ const ConversationUI: React.FC = () => {
       // Generate mentor response
       setIsSpeaking(true);
       
-      // In a real implementation, we would call an LLM here
-      const response = `I understand what you're saying about "${transcription}". Let me think about that from a Stoic perspective...`;
-      setMentorText(response);
+      // Call the actual LLM through our API instead of using a hardcoded response
+      console.log('🔍 Generating actual response using API with text:', transcription);
       
-      // Add mentor message to history
-      addMessage({
-        role: 'mentor',
-        content: response,
-        timestamp: Date.now(),
-      });
-      
-      // Generate and play audio
-      const speakerId = currentMentor === 'marcus' ? 0 : currentMentor === 'seneca' ? 1 : 2;
-      const audioResponse = await generateSpeech(response, speakerId, context);
-      
-      // Convert to base64 for future use
-      await blobToBase64(audioResponse);
-      
-      // Play the audio
-      await playAudio(audioResponse);
-      setIsSpeaking(false);
-      
+      try {
+        // Convert mentor name to proper format for API
+        const mentorName = latestMentor.charAt(0).toUpperCase() + latestMentor.slice(1);
+        const mentorObj = { name: mentorName } as Mentor;
+        
+        // Call the proper API function to get the mentor's response
+        const rawResponse = await generateResponse(transcription, mentorObj);
+        
+        // Sanitize the response to remove acknowledgment phrases
+        const response = sanitizeResponse(rawResponse);
+        
+        console.log('🔍 Received response from API:', response.substring(0, 100) + '...');
+        
+        setMentorText(response);
+        
+        // Add mentor message to history
+        addMessage({
+          role: 'mentor',
+          content: response,
+          timestamp: Date.now(),
+        });
+        
+        // Generate and play audio
+        const speakerId = latestMentor === 'marcus' ? 0 : latestMentor === 'seneca' ? 1 : 2;
+        console.log(`🔍 CONVERSATION UI - Using speaker ID: ${speakerId} for mentor: ${latestMentor}`);
+        const audioResponse = await generateSpeech(response, speakerId, context);
+        
+        // Convert to base64 for future use
+        await blobToBase64(audioResponse);
+        
+        // Play the audio
+        await playAudio(audioResponse);
+        setIsSpeaking(false);
+      } catch (err) {
+        console.error('Error generating mentor response:', err);
+        setError(`Failed to generate response: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        setIsSpeaking(false);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError(`Error: ${errorMessage}`);

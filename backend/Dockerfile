@@ -18,4 +18,4 @@ COPY . .
 EXPOSE 5002
 
 # Command to run the app
-CMD ["python", "mock_api.py"] 
+CMD ["python", "api.py"] 

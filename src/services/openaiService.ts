@@ -1,4 +1,7 @@
 import { API_ENDPOINTS } from '../constants/app';
+import { createMentorPrompt, mentorPrompt } from '../constants/mentorPrompts';
+
+console.log('🚀 openaiService.ts file loaded');
 
 /**
  * Represents a chat message in the OpenAI API format
@@ -32,6 +35,16 @@ export async function* streamChatCompletionWithOpenAI(
   messages: ChatMessage[],
   options: ChatCompletionOptions = {}
 ): AsyncGenerator<string> {
+  console.log('🌐 streamChatCompletionWithOpenAI called with messages:', messages.length);
+  
+  // Detailed logging of all messages being sent to OpenAI
+  console.log('🔍 OPENAI REQUEST - COMPLETE MESSAGE PAYLOAD:');
+  messages.forEach((msg, index) => {
+    console.log(`🔍 OPENAI MESSAGE [${index}] - Role: ${msg.role}`);
+    console.log(`🔍 OPENAI MESSAGE [${index}] - Content: 
+${msg.content}`);
+  });
+  
   const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
   
   console.log('OpenAI API Key available for chat:', !!apiKey);
@@ -180,27 +193,48 @@ export async function generateChatCompletion(
 /**
  * Create a context-aware system prompt for a mentor
  * 
- * @param mentorPrompt The base mentor prompt (personality)
+ * @param mentor The mentor to create a prompt for (accepts full name or first name)
  * @param conversationContext Additional context about the conversation
+ * @param useVerbosePrompt Whether to use the full detailed prompt or the concise version
  * @returns A complete system prompt
  */
-export function createSystemPrompt(mentorPrompt: string, conversationContext?: string): string {
-  let systemPrompt = mentorPrompt;
+export function createSystemPrompt(
+  mentor: string,
+  conversationContext?: string,
+  useVerbosePrompt: boolean = true
+): string {
+  // Normalize mentor name to just the first name for consistency
+  let mentorFirstName: 'Marcus' | 'Seneca' | 'Epictetus';
   
-  // Add conversation context if provided
-  if (conversationContext) {
-    systemPrompt += `\n\nConversation context: ${conversationContext}`;
+  // Standardize the mentor name format
+  const normalizedName = mentor.toLowerCase().trim();
+  
+  if (normalizedName.includes('marcus') || normalizedName.includes('aurelius')) {
+    mentorFirstName = 'Marcus';
+  } else if (normalizedName.includes('seneca')) {
+    mentorFirstName = 'Seneca';
+  } else if (normalizedName.includes('epictetus')) {
+    mentorFirstName = 'Epictetus';
+  } else {
+    // Default to Marcus if the name is not recognized
+    console.warn(`Unknown mentor name: "${mentor}", defaulting to Marcus`);
+    mentorFirstName = 'Marcus';
   }
   
-  // Add global instructions for all mentors
-  systemPrompt += `\n\nGeneral instructions:
-- Keep responses concise and direct, aimed at spoken conversation
-- Speak with wisdom and insight in a stoic philosophical voice
-- Respond as if speaking aloud, not writing
-- Avoid complex structures like lists or citations
-- Respond directly to the user's query in a conversational tone`;
+  console.log(`Creating system prompt for "${mentor}" (normalized to "${mentorFirstName}")`);
   
-  return systemPrompt;
+  // Use either the verbose or concise prompt based on the parameter
+  const systemPrompt = useVerbosePrompt 
+    ? createMentorPrompt(mentorFirstName)
+    : mentorPrompt(mentorFirstName);
+  
+  // Add conversation context if provided
+  let finalPrompt = systemPrompt;
+  if (conversationContext) {
+    finalPrompt += `\n\nConversation context: ${conversationContext}`;
+  }
+  
+  return finalPrompt;
 }
 
 /**
@@ -208,8 +242,81 @@ export function createSystemPrompt(mentorPrompt: string, conversationContext?: s
  */
 export function useDirectOpenAI(): boolean {
   const envValue = import.meta.env.VITE_USE_DIRECT_OPENAI;
+  console.log('🔄 useDirectOpenAI() called');
+  console.log('🔄 Raw environment value:', envValue);
+  console.log('🔄 Value type:', typeof envValue);
+  console.log('🔄 Value comparison with "true":', envValue === 'true');
+  console.log('🔄 Value comparison with true:', envValue === true);
+  
   const useDirectApi = envValue === 'true' || envValue === true;
-  console.log('Using direct OpenAI API:', useDirectApi);
-  console.log('ENV value type:', typeof envValue, 'value:', envValue);
+  console.log('🔄 Final determination - Using direct OpenAI API:', useDirectApi);
   return useDirectApi;
+}
+
+/**
+ * Sanitizes a response to remove acknowledgment phrases
+ * 
+ * @param text The text to sanitize
+ * @returns The sanitized text
+ */
+export function sanitizeResponse(text: string): string {
+  console.log(`🧹 SANITIZE - Starting with text: "${text.substring(0, 100)}..."`);
+  
+  // List of acknowledgment phrases to check for and remove
+  const acknowledgmentPhrases = [
+    /^I understand what you're saying/i,
+    /^I understand what you are saying/i,
+    /^I see what you're saying/i,
+    /^I see what you are saying/i,
+    /^I understand your question/i,
+    /^Let me think about that/i,
+    /^I appreciate your question/i,
+    /^Thank you for your question/i,
+    /^As a Stoic philosopher/i,
+    /^From a Stoic perspective/i,
+    /^Looking at this from a Stoic perspective/i,
+    /^Speaking as a Stoic/i,
+    /^I understand you're asking/i,
+    /^I understand you are asking/i,
+    /^I am here/i,
+    /^Yes, I am here/i,
+    /^Indeed I am/i,
+    /^Present and attentive/i,
+    /^Present and listening/i,
+    /^Yes, at your service/i,
+    /^Indeed\./i,
+  ];
+  
+  let sanitized = text;
+  let wasModified = false;
+  
+  // Check each phrase against the text
+  for (const phrase of acknowledgmentPhrases) {
+    if (phrase.test(sanitized)) {
+      console.log(`🧹 SANITIZE - Found acknowledgment phrase matching: ${phrase}`);
+      
+      // Find the first sentence ending after the acknowledgment phrase
+      const phraseMatch = sanitized.match(phrase);
+      if (phraseMatch && phraseMatch.index !== undefined) {
+        const startIndex = phraseMatch.index;
+        // Find the end of the first sentence
+        const endIndex = sanitized.indexOf('.', startIndex);
+        
+        if (endIndex !== -1) {
+          // Remove the entire first sentence containing the acknowledgment
+          sanitized = sanitized.substring(endIndex + 1).trim();
+          wasModified = true;
+        }
+      }
+    }
+  }
+  
+  if (wasModified) {
+    console.log(`🧹 SANITIZE - Response was modified!`);
+    console.log(`🧹 SANITIZE - Sanitized text: "${sanitized.substring(0, 100)}..."`);
+  } else {
+    console.log(`🧹 SANITIZE - No acknowledgment phrases found`);
+  }
+  
+  return sanitized;
 } 
