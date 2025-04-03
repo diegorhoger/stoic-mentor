@@ -212,4 +212,45 @@ The project uses GitHub Actions for continuous integration and deployment, with 
 When developing locally, these CI/CD workflows don't impact your workflow. You can continue to use:
 - `npm run dev` - For web development
 - `expo start` - For mobile development (requires expo-cli)
-- `cd backend && flask run` - For backend development 
+- `cd backend && flask run` - For backend development
+
+## Technologies Used
+
+### Backend Technologies
+- **Flask**: A lightweight web framework for Python used to build the RESTful API
+- **Kokoro TTS**: An open-weight small-footprint TTS model for high-quality voice synthesis
+- **OpenAI API**: Used for the GPT model integration
+- **TorchAudio**: For audio processing and manipulation
+
+## API Endpoints
+
+The following API endpoints are available:
+
+- `GET /api/health`: Health check endpoint
+- `GET /api/mentors`: Get available mentor personalities
+- `POST /api/tts`: Convert text to speech using Kokoro TTS (with fallbacks to mock generator and sine wave)
+- `POST /api/transcribe`: Transcribe speech to text
+- `POST /api/gpt`: Generate mentor response using OpenAI API
+- `POST /api/stream`: Stream audio (not yet implemented)
+
+## TTS Implementation
+
+The application implements a three-tier fallback system for text-to-speech:
+
+1. **Kokoro TTS**: Primary TTS engine using the open-source Kokoro model (82M parameters)
+   - Uses different voices mapped to each mentor personality
+   - Provides high-quality, natural-sounding speech
+   - Runs entirely on the backend server without external API calls
+
+2. **Mock Generator Fallback**: If Kokoro fails, falls back to the mock generator
+   - Generates simple audio patterns 
+   - Used mainly for development and testing
+
+3. **Sine Wave Fallback**: Ultimate fallback if all else fails
+   - Generates basic sine waves with different frequencies per voice
+   - Ensures the application can always provide audio feedback
+
+## Future Enhancements
+
+- **Voice Customization**: Add support for custom voice profiles beyond the default set
+- **Streaming TTS**: Implement chunk-based streaming for faster audio response 

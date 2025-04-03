@@ -8,8 +8,12 @@ Stoic Mentor is a web application that allows users to have voice conversations 
 
 ## Features
 
-- Interactive voice conversation with stoic philosopher AI mentors
+- **Three Stoic Mentors**: Marcus Aurelius, Seneca, and Epictetus
+- **Natural Conversation**: Speak and get spoken responses
 - Speech-to-text and text-to-speech capabilities
+- **Kokoro TTS**: High-quality voice synthesis with an open-source model
+- **Responsive Design**: Works on desktop and mobile devices
+- **Multi-platform**: Web, iOS, and Android support
 - Multiple mentor personalities with distinct speaking styles
 - Responsive web interface with modern design
 
@@ -168,3 +172,10 @@ For the mock API server to work, make sure the `VITE_MOCK_API_URL` points to the
 - ⚠️ OpenAI Whisper integration (experimental)
 - ⚠️ OpenAI GPT integration (experimental)
 - ❌ ElevenLabs TTS integration (not implemented yet)
+
+### Requirements
+
+1. **OpenAI API Key** - for GPT model access
+2. **Kokoro TTS** - for text-to-speech conversion (runs locally on the backend, no API key needed)
+3. **Python 3.9+** - for running the backend server
+4. **Node.js 18+** - for running the front-end

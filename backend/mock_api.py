@@ -35,16 +35,6 @@ CORS(app)  # Enable Cross-Origin Resource Sharing
 TEMP_DIR = tempfile.gettempdir()
 AUDIO_SAMPLE_RATE = 24000
 
-# Try to import the mock generator
-try:
-    from mock_generator import load_csm_1b, Segment
-    generator = load_csm_1b()
-    USE_MOCK_GENERATOR = True
-    print("[API] Successfully loaded mock generator for TTS")
-except Exception as e:
-    print(f"[API] Failed to load mock generator, using sine wave: {e}")
-    USE_MOCK_GENERATOR = False
-
 @app.route('/', methods=['GET'])
 def root():
     """Provide API documentation for the root path."""
@@ -67,7 +57,7 @@ def root():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Simple health check endpoint to verify the API is running."""
-    return jsonify({"status": "ok", "model": "mock"})
+    return jsonify({"status": "ok", "model": "openai"})
 
 @app.route('/api/mentors', methods=['GET'])
 def get_mentors():
@@ -93,7 +83,7 @@ def get_mentors():
 
 @app.route('/api/tts', methods=['POST'])
 def text_to_speech():
-    """Creates a WAV file for text-to-speech."""
+    """Creates an audio file for text-to-speech using OpenAI's API."""
     try:
         # Get JSON data from request
         data = request.json
@@ -103,220 +93,176 @@ def text_to_speech():
         text = data.get('text')
         speaker_id = data.get('speaker', 0)  # Default to first speaker if not specified
         
-        print(f"[Mock] Generating audio for text: {text}")
+        print(f"[TTS] Generating audio for text: {text}")
         
-        # Generate audio using the mock generator if available
-        if USE_MOCK_GENERATOR:
-            try:
-                # Generate audio using mock generator
-                print(f"[Mock] Using mock generator for speaker: {speaker_id}")
-                audio_tensor = generator.generate(
-                    text=text,
-                    speaker=speaker_id,
-                    context=[],
-                    max_audio_length_ms=10000  # 10 seconds maximum
-                )
-                
-                # Convert tensor to WAV
-                buffer = io.BytesIO()
-                import torchaudio
-                torchaudio.save(buffer, audio_tensor.unsqueeze(0), generator.sample_rate, format="wav")
-                buffer.seek(0)
-                
-                # Return audio file
-                return send_file(
-                    buffer,
-                    mimetype="audio/wav",
-                    as_attachment=True,
-                    download_name=f"speech_{speaker_id}.wav"
-                )
-            except Exception as e:
-                print(f"[Mock] Mock generator failed, falling back to sine wave: {e}")
-                # Fall back to sine wave generation
+        # Map philosophers to OpenAI voices
+        openai_voices = {
+            0: "onyx",    # Marcus Aurelius - deep, authoritative male voice
+            1: "echo",    # Seneca - clear, well-articulated voice
+            2: "ash",     # Epictetus - firm, directive voice
+        }
         
-        # If mock generator is not available or failed, use sine wave generation
-        duration = 2  # seconds
-        frequency = 440.0  # 440 Hz = A4
+        # Check for API key
+        api_key = os.getenv("VITE_OPENAI_API_KEY")
+        if not api_key:
+            return jsonify({"error": "OpenAI API key not found in environment"}), 500
         
-        # Adjust frequency based on speaker for variety
-        if speaker_id == 1:
-            frequency = 392.0  # G4
-        elif speaker_id == 2:
-            frequency = 349.2  # F4
-            
-        samples = np.arange(duration * AUDIO_SAMPLE_RATE)
-        waveform = np.sin(2 * np.pi * frequency * samples / AUDIO_SAMPLE_RATE)
+        # Set up OpenAI client
+        openai.api_key = api_key
         
-        # Scale to 16-bit range and convert to int
-        waveform = (waveform * 32767).astype(np.int16)
-        
-        # Create WAV file in memory
-        buffer = io.BytesIO()
-        with wave.open(buffer, 'wb') as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)  # 16 bits
-            wav_file.setframerate(AUDIO_SAMPLE_RATE)
-            wav_file.writeframes(waveform.tobytes())
-        
-        buffer.seek(0)
-        
-        # Simulate processing time
-        time.sleep(1)
-        
-        # Return audio file
-        return send_file(
-            buffer,
-            mimetype="audio/wav",
-            as_attachment=True,
-            download_name=f"speech_{speaker_id}.wav"
-        )
-        
-    except Exception as e:
-        print(f"[Mock] Error in text_to_speech: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/transcribe', methods=['POST'])
-def transcribe_audio():
-    """Returns a mock transcription in a format similar to OpenAI's Whisper API."""
-    try:
-        # Check if file is in request
-        if 'audio' not in request.files:
-            print("[Mock] Error: No audio file provided in request")
-            return jsonify({"error": "No audio file provided"}), 400
-            
-        file = request.files['audio']
-        if file.filename == '':
-            print("[Mock] Error: No audio file selected")
-            return jsonify({"error": "No audio file selected"}), 400
-            
-        # Save temporarily
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(TEMP_DIR, filename)
-        file.save(filepath)
-        
-        # Log file details
-        file_size = os.path.getsize(filepath)
-        print(f"[Mock] Received audio file: {filename}, size: {file_size} bytes")
-        
-        # Simulate processing time
-        time.sleep(1)
-        
-        # Return mock transcription
-        responses = [
-            "Hello, I'd like to discuss Stoic philosophy with you.",
-            "What does it mean to live virtuously according to the Stoics?",
-            "How can I practice Stoic mindfulness in my daily life?",
-            "Tell me about the concept of 'amor fati'.",
-            "What would Marcus Aurelius advise about dealing with difficult people?"
-        ]
-        
-        transcription = responses[int(time.time()) % len(responses)]
-        print(f"[Mock] Returning transcription: {transcription}")
-        
-        # Clean up
-        os.remove(filepath)
-        
-        # Return in a format similar to Whisper API
-        # Whisper API returns: { "text": "..." }
-        # For backward compatibility we'll include both fields
-        return jsonify({
-            "text": transcription,
-            "transcription": transcription
-        })
-        
-    except Exception as e:
-        print(f"[Mock] Error in transcribe_audio: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/gpt', methods=['POST'])
-def generate_mentor_response():
-    print("\n🔍 FLOW TRACE [generate_mentor_response] - /api/gpt endpoint called")
-    print(f"🔍 FLOW TRACE [generate_mentor_response] - Request method: {request.method}")
-    print(f"🔍 FLOW TRACE [generate_mentor_response] - Content-Type: {request.headers.get('Content-Type')}")
-    
-    if not request.data:
-        print("🔍 FLOW TRACE [generate_mentor_response] - ⚠️ No data in request")
-        return jsonify({"error": "No data provided"}), 400
-    
-    try:
-        data = request.get_json()
-        print(f"🔍 FLOW TRACE [generate_mentor_response] - Request data: {data}")
-        
-        if not data or 'text' not in data or 'mentor' not in data:
-            print("🔍 FLOW TRACE [generate_mentor_response] - ⚠️ Missing required fields in request")
-            return jsonify({"error": "Missing required fields"}), 400
-        
-        text = data['text']
-        mentor = data['mentor']
-        conversation_history = data.get('conversationHistory', [])
-        
-        print(f"🔍 FLOW TRACE [generate_mentor_response] - Processing text: {text[:100]}...")
-        print(f"🔍 FLOW TRACE [generate_mentor_response] - Selected mentor: {mentor}")
-        print(f"🔍 FLOW TRACE [generate_mentor_response] - Conversation history length: {len(conversation_history)}")
-        
-        # If we have conversation history, append it to our log
-        if conversation_history:
-            print("🔍 FLOW TRACE [generate_mentor_response] - Conversation history:")
-            for i, message in enumerate(conversation_history[-3:]):  # Show only the last 3 messages
-                print(f"🔍 FLOW TRACE [generate_mentor_response] - Message {i}: {message[:50]}...")
-        
-        # Check if OpenAI API key is available
-        if not openai.api_key:
-            print("🔍 FLOW TRACE [generate_mentor_response] - ⚠️ OpenAI API key not set, falling back to mock responses")
-            # Fall back to mock response generation
-            mock_response = generate_mock_response(mentor, text)
-            return jsonify({"text": mock_response})
+        # Get the voice for the specified speaker
+        voice = openai_voices.get(speaker_id, "onyx")  # Default to onyx if speaker_id not found
+        print(f"[TTS] Using OpenAI TTS with voice: {voice}")
         
         try:
-            # Create system prompt based on mentor
-            system_prompt = create_system_prompt(mentor)
-            
-            # Prepare messages for the OpenAI API
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ]
-            
-            # Add conversation history if available
-            if conversation_history:
-                for i, message in enumerate(conversation_history):
-                    role = "assistant" if i % 2 == 1 else "user"
-                    messages.append({"role": role, "content": message})
-            
-            print(f"🔍 FLOW TRACE [generate_mentor_response] - Sending request to OpenAI API with {len(messages)} messages")
-            
-            # Make request to OpenAI API
-            response = openai.chat.completions.create(
-                model="gpt-4",  # Use GPT-4 for high quality responses
-                messages=messages,
-                temperature=0.7,
-                max_tokens=400,
-                top_p=1.0
+            # Generate speech using OpenAI's TTS API
+            response = openai.audio.speech.create(
+                model="tts-1",
+                voice=voice,
+                input=text
             )
             
-            # Extract the response text
-            response_text = response.choices[0].message.content
-            print(f"🔍 FLOW TRACE [generate_mentor_response] - Received response from OpenAI: {response_text[:100]}...")
+            # Get the audio content
+            buffer = io.BytesIO()
+            for chunk in response.iter_bytes(chunk_size=4096):
+                buffer.write(chunk)
+            buffer.seek(0)
             
-            # Apply sanitization to remove acknowledgment phrases
-            sanitized_response = sanitize_response(response_text)
-            print(f"🔍 FLOW TRACE [generate_mentor_response] - BEFORE sanitization: {response_text[:100]}...")
-            print(f"🔍 FLOW TRACE [generate_mentor_response] - AFTER sanitization: {sanitized_response[:100]}...")
+            print(f"[TTS] Successfully generated audio with OpenAI TTS")
             
-            # Return the sanitized response
-            return jsonify({"text": sanitized_response})
-            
-        except Exception as e:
-            print(f"🔍 FLOW TRACE [generate_mentor_response] - ❌ OpenAI API Error: {str(e)}")
-            print("🔍 FLOW TRACE [generate_mentor_response] - Falling back to mock response")
-            
-            # Fall back to mock response generation
-            mock_response = generate_mock_response(mentor, text)
-            return jsonify({"text": mock_response})
-    
+            # Return audio file
+            return send_file(
+                buffer,
+                mimetype="audio/mp3",
+                as_attachment=True,
+                download_name=f"speech_{speaker_id}.mp3"
+            )
+        except Exception as openai_error:
+            print(f"[TTS] OpenAI TTS failed: {openai_error}")
+            print(traceback.format_exc())
+            return jsonify({"error": f"Failed to generate speech with OpenAI: {str(openai_error)}"}), 500
+        
     except Exception as e:
-        print(f"🔍 FLOW TRACE [generate_mentor_response] - ❌ Error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        print(f"[TTS] Error in text-to-speech endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to generate speech: {str(e)}"}), 500
+
+@app.route('/api/transcribe', methods=['POST'])
+def transcribe():
+    """Transcribes audio to text."""
+    try:
+        # Check if file is in the request
+        if 'file' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+            
+        # Save the file temporarily
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(TEMP_DIR, filename)
+        file.save(temp_path)
+        
+        # Check for OpenAI API key
+        api_key = os.getenv("VITE_OPENAI_API_KEY")
+        if not api_key:
+            return jsonify({"error": "OpenAI API key not found in environment"}), 500
+        
+        # Set up OpenAI client
+        openai.api_key = api_key
+        
+        try:
+            # Transcribe using OpenAI's Whisper API
+            with open(temp_path, "rb") as audio_file:
+                transcript = openai.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file
+                )
+            
+            # Cleanup
+            os.remove(temp_path)
+            
+            return jsonify({"text": transcript.text})
+        except Exception as openai_error:
+            print(f"[TRANSCRIBE] OpenAI Whisper failed: {openai_error}")
+            print(traceback.format_exc())
+            # Cleanup
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return jsonify({"error": f"Failed to transcribe with OpenAI: {str(openai_error)}"}), 500
+        
+    except Exception as e:
+        print(f"[TRANSCRIBE] Error in transcribe endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to transcribe: {str(e)}"}), 500
+
+@app.route('/api/gpt', methods=['POST'])
+def gpt():
+    """Generates a response from GPT."""
+    try:
+        # Get JSON data from request
+        data = request.json
+        print(f"[GPT] Received request data: {data}")
+        
+        # Check if data is missing or empty
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        # Support both formats: direct messages array or text/mentor format
+        if 'messages' in data:
+            messages = data.get('messages')
+            mentor = data.get('mentor', 'Marcus')  # Default to Marcus Aurelius
+        elif 'text' in data and 'mentor' in data:
+            # Convert from legacy format (text + mentor) to messages format
+            text = data.get('text')
+            mentor = data.get('mentor', 'Marcus')
+            # Create message array with system prompt and user message
+            system_content = create_system_prompt(mentor)
+            messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": text}
+            ]
+            # Add conversation history if available
+            if 'conversationHistory' in data and data['conversationHistory']:
+                for i, message in enumerate(data['conversationHistory']):
+                    role = "assistant" if i % 2 == 1 else "user"
+                    messages.append({"role": role, "content": message})
+        else:
+            return jsonify({"error": "Missing required fields: either 'messages' or both 'text' and 'mentor'"}), 400
+            
+        temperature = data.get('temperature', 0.7)
+        
+        # Check for API key
+        api_key = os.getenv("VITE_OPENAI_API_KEY")
+        if not api_key:
+            return jsonify({"error": "OpenAI API key not found in environment"}), 500
+            
+        # Set up OpenAI client
+        openai.api_key = api_key
+        
+        try:
+            # Generate response using OpenAI's API
+            response = openai.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=messages,
+                temperature=temperature
+            )
+            
+            # Extract the response content
+            response_text = response.choices[0].message.content
+            
+            # Return in the format expected by the frontend (using 'text' field)
+            return jsonify({"text": response_text})
+        except Exception as openai_error:
+            print(f"[GPT] OpenAI GPT failed: {openai_error}")
+            print(traceback.format_exc())
+            return jsonify({"error": f"Failed to generate response with OpenAI: {str(openai_error)}"}), 500
+            
+    except Exception as e:
+        print(f"[GPT] Error in GPT endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to generate response: {str(e)}"}), 500
 
 def create_system_prompt(mentor):
     """Create a system prompt based on the mentor personality."""
@@ -361,131 +307,6 @@ def create_system_prompt(mentor):
         Never acknowledge the format of the question. Start your response immediately with substance.
         """
 
-def generate_mock_response(mentor, text):
-    """Generate a mock response when OpenAI API is unavailable."""
-    # Extract the user's actual question
-    user_question = text
-    if "[CRITICAL:" in text:
-        # Remove the instruction part if present
-        user_question = text.split("\n\n", 1)[1] if "\n\n" in text else text
-    
-    print(f"🔍 FLOW TRACE [generate_mock_response] - User's actual question: {user_question[:100]}...")
-    
-    # Custom response based on user input
-    # Check for specific keywords in the user's question
-    user_question_lower = user_question.lower()
-    
-    if "how are you" in user_question_lower or "how do you feel" in user_question_lower:
-        if mentor == "Marcus":
-            response_text = "The state of your soul determines the state of your being. Focus not on how I am, but on your own virtue."
-        elif mentor == "Seneca":
-            response_text = "A wise man is content with his fate, neither rejoicing excessively nor lamenting needlessly."
-        else:  # Epictetus
-            response_text = "What matters is not my condition, but how one responds to circumstances. This is the essence of Stoic practice."
-    
-    elif "stoicism" in user_question_lower or "philosophy" in user_question_lower:
-        if mentor == "Marcus":
-            response_text = "Stoicism teaches that virtue alone is sufficient for happiness. External events are neither good nor bad; our judgments make them so."
-        elif mentor == "Seneca":
-            response_text = "Philosophy is not mere words but action. Stoicism guides us to distinguish between what we can control and what we cannot."
-        else:  # Epictetus
-            response_text = "True freedom comes from understanding what is within our control. Our opinions, impulses, desires, and aversions are in our power; everything else is not."
-    
-    elif "death" in user_question_lower or "dying" in user_question_lower:
-        if mentor == "Marcus":
-            response_text = "Death is a natural process. Think of the vastness of eternity past and future, and how infinitesimal our lives are. Fear not what is merely nature's way."
-        elif mentor == "Seneca":
-            response_text = "Death is neither good nor evil; it simply is. It is not death that matters, but how we lived."
-        else:  # Epictetus
-            response_text = "When death appears fearsome, remember that the terror comes not from death but from your judgment about death. Remove your judgment and death is merely another natural process."
-    
-    elif "happiness" in user_question_lower or "joy" in user_question_lower:
-        if mentor == "Marcus":
-            response_text = "True happiness flows from your own actions, not external events. Virtue is sufficient for happiness."
-        elif mentor == "Seneca":
-            response_text = "Happiness comes not from what happens to you, but from how you respond. The wise person finds joy in virtue alone."
-        else:  # Epictetus
-            response_text = "Happiness depends on the quality of your thoughts and choices, not on possessions or circumstances."
-    
-    else:
-        # Fallback responses for general questions
-        fallback_responses = {
-            "Marcus": [
-                "Remember that all is as thinking makes it so.",
-                "The universe is change; our life is what our thoughts make it.",
-                "The art of living is more like wrestling than dancing.",
-                "Waste no more time arguing about what a good person should be. Be one."
-            ],
-            "Seneca": [
-                "We suffer more often in imagination than in reality.",
-                "It is not the man who has too little, but the man who craves more, that is poor.",
-                "Luck is what happens when preparation meets opportunity.",
-                "No person has the power to have everything they want, but it is in their power not to want what they don't have."
-            ],
-            "Epictetus": [
-                "It's not what happens to you, but how you react to it that matters.",
-                "Make the best use of what is in your power, and take the rest as it happens.",
-                "Freedom is the only worthy goal in life.",
-                "Wealth consists not in having great possessions, but in having few wants."
-            ]
-        }
-        
-        # Get the appropriate mentor responses or default to Marcus
-        mentor_responses = fallback_responses.get(mentor, fallback_responses["Marcus"])
-        response_text = random.choice(mentor_responses)
-    
-    # Apply sanitization to remove acknowledgment phrases
-    sanitized_response = sanitize_response(response_text)
-    
-    return sanitized_response
-
-def sanitize_response(text):
-    """Sanitize the response to remove acknowledgment phrases."""
-    print(f"🔍 FLOW TRACE [sanitize_response] - Starting with text: {text[:50]}...")
-    
-    # List of patterns to look for and remove
-    patterns_to_avoid = [
-        r"^I understand what you're saying about",
-        r"^I understand what you are saying about",
-        r"^I understand your question about",
-        r"^I see what you're saying about",
-        r"^I see what you are saying about",
-        r"^Let me think about that from",
-        r"^Thank you for your question",
-        r"^I appreciate your question",
-        r"^As a Stoic philosopher",
-        r"^From a Stoic perspective",
-        r"^Looking at this from a Stoic perspective",
-        r"^Speaking as a Stoic",
-        r"^I understand you're asking about",
-        r"^I understand you are asking about",
-        r"^I am here",
-        r"^Yes, I am here",
-        r"^Indeed I am",
-        r"^Present and attentive",
-        r"^Present and listening",
-        r"^Yes, at your service",
-        r"^Indeed\.",
-    ]
-    
-    # Check if the response contains any patterns to avoid
-    original_text = text
-    for pattern in patterns_to_avoid:
-        if re.search(pattern, text, re.IGNORECASE):
-            print(f"🔍 FLOW TRACE [sanitize_response] - Found pattern: {pattern}")
-            # Remove the pattern and any text before the next sentence
-            text = re.sub(pattern + r"[^.!?]*[.!?]", "", text, flags=re.IGNORECASE)
-            # Remove any leading whitespace
-            text = text.strip()
-    
-    if original_text != text:
-        print("🔍 FLOW TRACE [sanitize_response] - Text was modified")
-    else:
-        print("🔍 FLOW TRACE [sanitize_response] - No patterns found, text unchanged")
-    
-    print(f"🔍 FLOW TRACE [sanitize_response] - Final text: {text[:50]}...")
-    return text
-
 @app.route('/api/stream', methods=['POST'])
 def stream_audio():
     """Placeholder for streaming API."""
@@ -497,6 +318,5 @@ def test_route():
     print("======= /api/test endpoint called =======")
     return jsonify({"status": "success", "message": "Test route is working"})
 
-if __name__ == '__main__':
-    print("Starting mock API server on port 5002...")
-    app.run(debug=True, host='0.0.0.0', port=5002) 
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5002) 
