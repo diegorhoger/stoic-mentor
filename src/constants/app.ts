@@ -10,12 +10,14 @@ export const AUDIO_SETTINGS = {
 
 // API endpoints
 export const API_ENDPOINTS = {
-  baseUrl: import.meta.env.VITE_MOCK_API_URL || 'http://localhost:5002',
+  baseUrl: import.meta.env.VITE_MOCK_API_URL || 'http://localhost:5001',
   health: '/api/health',
   transcribe: '/api/transcribe',
   tts: '/api/tts',
   gpt: '/api/gpt',
   mentors: '/api/mentors',
+  // Socket VAD endpoint - uses the same host but with WebSocket protocol
+  socketVadUrl: import.meta.env.VITE_SOCKET_VAD_URL || 'ws://localhost:5001',
   // OpenAI direct endpoints
   baseOpenAIUrl: 'https://api.openai.com',
   whisperEndpoint: '/v1/audio/transcriptions',

@@ -130,6 +130,34 @@ Components are designed to be modular and reusable:
 - Authentic Stoic wisdom that maintains the distinctive voice of each philosopher
 - Seamless fallback to reliable mock responses if API issues occur
 
+### Implemented Voice Activity Detection (VAD)
+
+**Change**: Added Voice Activity Detection to automatically stop recording when the user stops speaking.
+
+**Rationale**: The previous implementation required users to manually stop recording after speaking, which created an unnatural conversation flow. The new VAD system provides a more intuitive experience by detecting silence and automatically transitioning from listening to processing.
+
+**Implementation Details**:
+- Created a new `useVoiceActivityDetection` hook that monitors audio levels
+- Added silence detection logic with configurable thresholds stored in constants
+- Integrated VAD with the existing `useMicStream` hook
+- Configured the conversation UI to display VAD status to users
+- Added safeguards to prevent premature silence detection:
+  - Minimum speaking time before silence detection activates
+  - Consecutive silent frames required to trigger silence detection
+  - Configurable silence threshold and timeout duration
+
+**Technical Approach**:
+1. The `useVoiceActivityDetection` hook takes the current audio level as input
+2. When audio level falls below the silence threshold for a specified duration, it triggers a callback
+3. The silence timeout only starts after a minimum speaking time to avoid false triggers
+4. Visual feedback in the UI shows when VAD is active
+
+**Impact**: Users now experience:
+- More natural conversation flow without needing to manually stop recording
+- Automatic transition from speaking to processing
+- Reduced confusion about when to stop speaking
+- Visual feedback showing when VAD is active and monitoring their speech
+
 ### Enhanced Stoic Mentor Prompts
 
 **Change**: Reimplemented the mentor prompt system to provide more immersive, emotionally supportive responses that authentically reflect the distinct voices of each Stoic mentor.
@@ -253,4 +281,72 @@ The application implements a three-tier fallback system for text-to-speech:
 ## Future Enhancements
 
 - **Voice Customization**: Add support for custom voice profiles beyond the default set
-- **Streaming TTS**: Implement chunk-based streaming for faster audio response 
+- **Streaming TTS**: Implement chunk-based streaming for faster audio response
+
+## WebSocket-Based Voice Activity Detection (VAD)
+
+**Change**: Implemented WebSocket-based Voice Activity Detection
+
+**Rationale**: The previous approach to Voice Activity Detection (VAD) relied on client-side processing only, which led to inconsistent results across different devices and browsers. By moving to a WebSocket-based architecture, we gain several advantages:
+
+1. More consistent and reliable speech detection across devices and browsers
+2. Access to more powerful audio processing libraries (like WebRTC VAD) on the backend
+3. Adaptive thresholding and noise floor calibration
+4. Ensemble approach combining multiple detection methods
+5. Reduced client-side computational requirements
+
+**Implementation Details**:
+
+1. **Backend VAD Service**
+   - Created a Socket.IO-based WebSocket service in Flask
+   - Implemented a session-based architecture to maintain user state
+   - Combined RMS-based adaptive thresholding with WebRTC VAD
+   - Added dynamic calibration and configuration options
+   - Provided fine-tuning parameters for sensitivity and aggressiveness
+
+2. **Frontend Integration**
+   - Developed `socketVadService.ts` for WebSocket communication with the backend
+   - Created `useSocketVad` React hook for easy integration with components
+   - Implemented audio processing and streaming pipeline
+   - Added event-based architecture for speech detection events
+   - Built robust reconnection and error handling
+
+3. **Demo Component**
+   - Created `WebSocketVadDemo.tsx` to demonstrate the WebSocket VAD capabilities
+   - Added visual feedback for audio levels and thresholds
+   - Implemented controls for configuring VAD parameters
+   - Added debug information display
+
+**Impact**: Users now experience:
+   - More reliable and consistent speech detection
+   - Better handling of different noise environments
+   - Reduced false positives and negatives in speech detection
+   - More natural conversation flow
+   - Adaptive behavior that works across different microphones and devices
+
+**Usage Example**:
+```typescript
+// Using the WebSocket VAD hook in a component
+const {
+  isSpeaking,
+  audioLevel,
+  threshold,
+  startAudioProcessing,
+  stopAudioProcessing
+} = useSocketVad({
+  autoConnect: true,
+  autoInit: true,
+  onSpeakingChange: (speaking) => {
+    console.log('Speaking state changed:', speaking);
+    // Handle speaking state changes
+  }
+});
+
+// Start audio processing when needed
+useEffect(() => {
+  if (isListening) {
+    startAudioProcessing();
+    return () => stopAudioProcessing();
+  }
+}, [isListening]);
+``` 
