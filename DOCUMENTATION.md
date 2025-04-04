@@ -110,6 +110,35 @@ Components are designed to be modular and reusable:
 
 ## Recent Changes
 
+### Fixed WebSocket VAD Integration for Silence Detection
+
+**Change**: Fixed WebSocket VAD integration to properly handle silence detection and improve cross-origin resource sharing (CORS).
+
+**Rationale**: The WebSocket VAD system was experiencing connection issues and CORS errors that prevented proper silence detection, which is crucial for a natural conversation flow where the system needs to detect when the user has stopped speaking.
+
+**Implementation Details**:
+- Modified Socket.io client configuration to use both WebSocket and polling transports for better fallback support
+- Added explicit path, timeout, and connection options to ensure robust WebSocket connections
+- Enhanced the useSocketVad hook to better handle speaking/silent states with dedicated event handlers
+- Added comprehensive debugging tools and UI elements to monitor VAD state
+- Improved the Flask backend's CORS configuration to accept connections from all required origins
+- Added a dedicated OPTIONS route handler for Socket.io to properly handle preflight requests
+- Enhanced silence detection logic in useMentorCallEngine to respond more reliably to VAD events
+
+**Technical Approach**:
+1. Identified CORS issues through browser console analysis and addressed each with proper headers
+2. Implemented a more robust Socket.io client configuration with appropriate error handling
+3. Added dedicated event handlers for VAD_RESULT, SPEECH_START, and SPEECH_END events
+4. Created a debug panel in the UI to display real-time WebSocket VAD status
+5. Enhanced logging both client-side and server-side to trace connection issues
+
+**Impact**: Users now experience:
+- More reliable silence detection that properly ends recording when they stop speaking
+- Fewer connection errors and more stable WebSocket connections
+- Better cross-browser and cross-origin compatibility
+- Improved debug information to troubleshoot any remaining issues
+- A more natural conversation flow with the Stoic mentors
+
 ### Integrated WebSocket-based Voice Activity Detection (VAD)
 
 **Change**: Integrated the WebSocket-based VAD system with the main conversation UI to improve speech detection accuracy.
