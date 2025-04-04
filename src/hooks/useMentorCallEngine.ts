@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useMicStream } from './useMicStream';
+import { useSocketVad } from './useSocketVad';
 import { useSessionStore } from '../state/sessionStore';
 import { transcribeAudio } from '../services/whisperService';
 import { 
@@ -22,6 +23,7 @@ export interface MentorCallOptions {
   maxSilenceMs?: number;            // Maximum silence before considering the user done speaking
   immediateTranscription?: boolean; // Transcribe immediately as user speaks
   historyWindowSize?: number;       // Number of previous exchanges to keep in context
+  useSocketVad?: boolean;           // Whether to use WebSocket-based VAD instead of local processing
 }
 
 export interface MentorCallState {
@@ -38,6 +40,7 @@ export interface MentorCallState {
  * 2. Transcribe audio to text using Whisper
  * 3. Generate mentor response using GPT
  * 4. Synthesize and play audio response
+ * 
  */
 export function useMentorCallEngine(options: MentorCallOptions = {}) {
   
@@ -48,6 +51,7 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
     maxSilenceMs: 1500,
     immediateTranscription: false,
     historyWindowSize: 3,
+    useSocketVad: true,         // Default to using WebSocket VAD
   };
   
   const opts = { ...defaultOptions, ...options };
@@ -66,11 +70,46 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
   // Audio recording
   const { 
     isRecording, 
-    audioLevel, 
+    audioLevel: micAudioLevel, 
     startRecording, 
     stopRecording, 
     getAudioBlob 
   } = useMicStream();
+  
+  // Initialize the useSocketVad hook with our settings
+  const {
+    isConnected: isSocketVadConnected,
+    isSessionActive: isSocketVadSessionActive,
+    isSpeaking: isSocketVadDetectingSpeech,
+    audioLevel: socketVadAudioLevel,
+    threshold: socketVadThreshold,
+    connect: connectSocketVad,
+    startAudioProcessing: startSocketVadProcessing,
+    stopAudioProcessing: stopSocketVadProcessing,
+    forceRecalibration: recalibrateSocketVad,
+    disconnect: disconnectSocketVad
+  } = useSocketVad({
+    autoConnect: false,  // We'll manage the connection ourselves
+    autoInit: false,     // We'll initialize when needed
+    debug: true,
+    onSpeakingChange: (isSpeaking) => {
+      console.log(`[VAD] Speech state changed: ${isSpeaking ? 'SPEAKING' : 'SILENT'}`);
+    }
+  });
+  
+  // Combine audio levels
+  const audioLevel = opts.useSocketVad ? socketVadAudioLevel : micAudioLevel;
+  
+  // Track VAD state
+  const [isVADActive, setIsVADActive] = useState(false);
+  
+  // Debug state
+  const [debugState, setDebugState] = useState({
+    vadConnectionStatus: false,
+    vadSessionStatus: false,
+    vadActive: false,
+    vadSpeakingStatus: false,
+  });
   
   // Local state
   const [state, setState] = useState<MentorCallState>({
@@ -95,6 +134,7 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
   const responseTimeoutRef = useRef<number | null>(null);
   const isGeneratingResponseRef = useRef(false);
   const isStreamingTTSRef = useRef(false);
+  const previousSilenceStateRef = useRef(false);
   
   // Cleanup function
   const cleanupResources = useCallback(() => {
@@ -114,7 +154,27 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-  }, []);
+    
+    // Stop VAD processing if using socket VAD
+    if (opts.useSocketVad) {
+      stopSocketVadProcessing();
+    }
+  }, [opts.useSocketVad, stopSocketVadProcessing]);
+  
+  // Function to end a call completely
+  const endCall = useCallback(() => {
+    stopRecording();
+    cleanupResources();
+    
+    // If using socket VAD, disconnect it
+    if (opts.useSocketVad) {
+      disconnectSocketVad();
+    }
+    
+    setIsVADActive(false);
+    setIsListening(false);
+    setIsSpeaking(false);
+  }, [cleanupResources, disconnectSocketVad, opts.useSocketVad, setIsListening, setIsSpeaking, stopRecording]);
   
   // Update listening state based on recording state
   useEffect(() => {
@@ -135,8 +195,38 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
       // Create a new abort controller
       abortControllerRef.current = new AbortController();
       
+      // Connect and initialize VAD if using WebSocket VAD
+      if (opts.useSocketVad) {
+        console.log('[useMentorCallEngine] Connecting to WebSocket VAD');
+        const connected = await connectSocketVad();
+        if (!connected) {
+          throw new Error("Failed to connect to WebSocket VAD service");
+        }
+        
+        // Start audio processing with the WebSocket VAD
+        console.log('[useMentorCallEngine] Starting WebSocket VAD audio processing');
+        const started = await startSocketVadProcessing();
+        if (!started) {
+          throw new Error("Failed to start microphone recording for WebSocket VAD");
+        }
+        
+        setIsVADActive(true);
+      }
+      
       // Start recording
-      await startRecording();
+      const success = await startRecording();
+      if (!success) {
+        // Handle microphone permission errors
+        if (navigator.permissions) {
+          const micPermission = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+          if (micPermission.state === 'denied') {
+            throw new Error("Microphone access was denied. Please allow microphone access in your browser settings.");
+          }
+        }
+        
+        // Generic microphone error
+        throw new Error("Could not start microphone. It may be in use by another application.");
+      }
     } catch (error) {
       console.error('Error starting listening:', error);
       setState(prev => ({
@@ -146,14 +236,24 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
           ? error.message 
           : 'Failed to access microphone',
       }));
+      
+      // Clean up if there was an error
+      cleanupResources();
     }
-  }, [startRecording]);
+  }, [startRecording, connectSocketVad, startSocketVadProcessing, opts.useSocketVad, cleanupResources]);
   
   // Stop listening and process audio
   const stopListening = useCallback(async () => {
     try {
       // Stop recording
       stopRecording();
+      
+      // Also stop socket VAD processing if using it
+      if (opts.useSocketVad) {
+        console.log('[useMentorCallEngine] Stopping WebSocket VAD audio processing');
+        stopSocketVadProcessing();
+        setIsVADActive(false);
+      }
       
       // Start processing
       setState(prev => ({ ...prev, isProcessing: true }));
@@ -178,7 +278,7 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
           : 'Failed to process audio',
       }));
     }
-  }, [stopRecording, getAudioBlob]);
+  }, [stopRecording, getAudioBlob, opts.useSocketVad, stopSocketVadProcessing]);
   
   // Process audio: transcribe, generate response, and play
   const processAudio = useCallback(async (audioBlob: Blob) => {
@@ -484,6 +584,62 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
     return cleanupResources;
   }, [opts.autoStart, startListening, cleanupResources]);
   
+  // Monitor WebSocket VAD for silence detection
+  useEffect(() => {
+    // Only set up silence detection if using socket VAD and currently recording
+    if (!opts.useSocketVad || !isRecording) return;
+    
+    // Check if we have a change from speaking to silent
+    const isSilent = !isSocketVadDetectingSpeech;
+    const wasSpokenBefore = !previousSilenceStateRef.current;
+    const silenceJustStarted = isSilent && wasSpokenBefore;
+    
+    console.log(`[VAD] Current state - isSilent: ${isSilent}, wasSpokenBefore: ${wasSpokenBefore}, silenceJustStarted: ${silenceJustStarted}, isRecording: ${isRecording}`);
+    
+    // Update the previous silence state
+    previousSilenceStateRef.current = isSilent;
+    
+    // If silence just started, set a timer to stop recording after configured timeout
+    if (silenceJustStarted && isRecording) {
+      console.log(`[VAD] Silence detected, waiting ${opts.maxSilenceMs}ms before stopping...`);
+      
+      // Clear any existing timeout
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+      }
+      
+      // Set new timeout to stop listening after silence threshold
+      silenceTimeoutRef.current = window.setTimeout(() => {
+        console.log('[VAD] Silence timeout reached, stopping recording');
+        if (isRecording) {
+          stopListening();
+        }
+        silenceTimeoutRef.current = null;
+      }, opts.maxSilenceMs);
+    }
+    
+    // If the user was silent and now is speaking again, cancel any pending silence timeout
+    if (!isSilent && silenceTimeoutRef.current) {
+      console.log('[VAD] Speech detected, canceling silence timeout');
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+    
+    // Cleanup timeout on unmount or dependency change
+    return () => {
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+        silenceTimeoutRef.current = null;
+      }
+    };
+  }, [
+    opts.useSocketVad, 
+    opts.maxSilenceMs, 
+    isRecording, 
+    isSocketVadDetectingSpeech, 
+    stopListening
+  ]);
+  
   // Log and respond to mentor changes
   useEffect(() => {
     console.log(`🔍 MENTOR CHANGE DETECTED - Current mentor is now: ${currentMentor}`);
@@ -527,6 +683,38 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
     };
   }, []);
   
+  // Update debug state
+  useEffect(() => {
+    setDebugState({
+      vadConnectionStatus: isSocketVadConnected,
+      vadSessionStatus: isSocketVadSessionActive, 
+      vadActive: isVADActive,
+      vadSpeakingStatus: isSocketVadDetectingSpeech,
+    });
+    
+    console.log(`[VAD DEBUG] Connection: ${isSocketVadConnected ? 'YES' : 'NO'}, ` +
+                `Session: ${isSocketVadSessionActive ? 'ACTIVE' : 'INACTIVE'}, ` + 
+                `VAD Active: ${isVADActive ? 'YES' : 'NO'}, ` +
+                `Speaking: ${isSocketVadDetectingSpeech ? 'YES' : 'SILENT'}`);
+                
+  }, [isSocketVadConnected, isSocketVadSessionActive, isVADActive, isSocketVadDetectingSpeech]);
+  
+  // Initialize WebSocket VAD when the component mounts
+  useEffect(() => {
+    if (opts.useSocketVad) {
+      console.log('[useMentorCallEngine] Initializing WebSocket VAD on mount');
+      connectSocketVad().then(connected => {
+        console.log(`[useMentorCallEngine] WebSocket VAD connection ${connected ? 'successful' : 'failed'}`);
+      });
+    }
+    
+    return () => {
+      if (opts.useSocketVad) {
+        disconnectSocketVad();
+      }
+    };
+  }, [opts.useSocketVad, connectSocketVad, disconnectSocketVad]);
+  
   // Return the API
   return {
     ...state,
@@ -534,9 +722,16 @@ export function useMentorCallEngine(options: MentorCallOptions = {}) {
     isRecording,
     isSpeaking,
     isListening,
+    isVADActive,
     startListening,
     stopListening,
     toggleListening,
     interruptMentor,
+    endCall,
+    // Debug info for WebSocket VAD
+    vadDebugState: debugState,
+    isSocketVadConnected,
+    isSocketVadSessionActive,
+    isSocketVadDetectingSpeech
   };
 } 

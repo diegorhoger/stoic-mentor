@@ -1,4 +1,9 @@
 import { API_ENDPOINTS } from '../constants/app';
+import { audioCacheService } from './audioCacheService';
+
+// Constants for progressive loading
+const CHUNK_SIZE = 32 * 1024; // 32KB chunks
+const BUFFER_THRESHOLD = 2; // Number of chunks to buffer ahead
 
 /**
  * Interface for ElevenLabs Voice
@@ -16,39 +21,88 @@ interface ElevenLabsVoice {
   };
 }
 
+interface AudioProgress {
+  loaded: number;
+  total: number;
+  buffered: TimeRanges | null;
+  currentChunk: number;
+  totalChunks: number;
+}
+
+let currentAudio: HTMLAudioElement | null = null;
+let currentMessageId: string | null = null;
+let progressCallback: ((progress: AudioProgress) => void) | null = null;
+
+/**
+ * Splits a large audio blob into smaller chunks
+ */
+const splitAudioIntoChunks = async (audioBlob: Blob): Promise<Blob[]> => {
+  const chunks: Blob[] = [];
+  let offset = 0;
+  
+  while (offset < audioBlob.size) {
+    const chunk = audioBlob.slice(offset, offset + CHUNK_SIZE);
+    chunks.push(chunk);
+    offset += CHUNK_SIZE;
+  }
+  
+  return chunks;
+};
+
 /**
  * Converts text to speech using either the ElevenLabs API or the mock API
  */
 export const generateSpeech = async (
   text: string,
   speakerId: number,
+  messageId?: string,
+  onProgress?: (progress: AudioProgress) => void,
   context: Array<{
     text: string;
     speaker: number;
-    audio: string; // Base64 encoded audio
+    audio: string;
   }> = []
 ): Promise<Blob> => {
   try {
+    progressCallback = onProgress || null;
+    const msgId = messageId || `msg_${Date.now()}`;
+
+    // Check if we have cached audio for this message
+    const cachedChunks = await audioCacheService.getAudioChunks(msgId);
+    if (cachedChunks.length > 0) {
+      console.log('🔄 Found cached audio chunks for message:', msgId);
+      return new Blob(cachedChunks, { type: 'audio/mp3' });
+    }
+
     // Check if we should use direct ElevenLabs integration
     const useDirectApi = import.meta.env.VITE_USE_DIRECT_TTS === 'true' || import.meta.env.VITE_USE_DIRECT_TTS === true;
     
     console.log('🔊 Generating speech...');
     console.log('🔧 Using direct ElevenLabs API:', useDirectApi);
-    console.log('🔧 ENV value:', import.meta.env.VITE_USE_DIRECT_TTS);
     
+    let audioBlob: Blob;
     if (useDirectApi) {
       try {
         console.log('🔌 Attempting to use ElevenLabs API directly');
-        return await generateSpeechWithElevenLabs(text, speakerId);
+        audioBlob = await generateSpeechWithElevenLabs(text, speakerId);
       } catch (error) {
         console.error('❌ ElevenLabs API failed, falling back to mock API:', error);
-        console.log('🔄 Falling back to mock API at:', import.meta.env.VITE_MOCK_API_URL);
-        return await generateSpeechWithMockApi(text, speakerId, context);
+        audioBlob = await generateSpeechWithMockApi(text, speakerId, context);
       }
     } else {
-      console.log('🔌 Using mock API at:', import.meta.env.VITE_MOCK_API_URL);
-      return await generateSpeechWithMockApi(text, speakerId, context);
+      audioBlob = await generateSpeechWithMockApi(text, speakerId, context);
     }
+
+    // Split audio into chunks and cache them
+    const chunks = await splitAudioIntoChunks(audioBlob);
+    console.log(`Split audio into ${chunks.length} chunks`);
+
+    // Cache each chunk
+    for (let i = 0; i < chunks.length; i++) {
+      await audioCacheService.cacheAudioChunk(msgId, chunks[i], i);
+    }
+
+    return audioBlob;
   } catch (error) {
     console.error('Error generating speech:', error);
     throw error;
@@ -267,40 +321,159 @@ const generateSpeechWithMockApi = async (
 };
 
 /**
- * Plays audio from a blob
+ * Plays audio from a blob with progressive loading and caching support
  */
-export const playAudio = (audioBlob: Blob): Promise<void> => {
+export const playAudio = async (audioBlob: Blob, messageId: string): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const audioUrl = URL.createObjectURL(audioBlob);
-    const audio = new Audio(audioUrl);
-    
-    audio.onended = () => {
-      URL.revokeObjectURL(audioUrl);
-      resolve();
-    };
-    
-    audio.onerror = (error) => {
-      URL.revokeObjectURL(audioUrl);
+    try {
+      // Stop any currently playing audio and save its state
+      if (currentAudio && currentMessageId) {
+        const currentTime = currentAudio.currentTime;
+        audioCacheService.saveConversationState(
+          currentMessageId,
+          messageId,
+          currentTime,
+          'paused'
+        );
+        currentAudio.pause();
+      }
+
+      // Split audio into chunks if needed
+      splitAudioIntoChunks(audioBlob).then(async chunks => {
+        // Create new audio element
+        const audio = new Audio();
+        currentAudio = audio;
+        currentMessageId = messageId;
+
+        let currentChunkIndex = 0;
+        const totalChunks = chunks.length;
+
+        // Set up progress tracking
+        audio.addEventListener('timeupdate', () => {
+          if (progressCallback) {
+            progressCallback({
+              loaded: audio.currentTime,
+              total: audio.duration || 0,
+              buffered: audio.buffered,
+              currentChunk: currentChunkIndex,
+              totalChunks
+            });
+          }
+        });
+
+        // Check for previous playback position
+        const state = await audioCacheService.getConversationState(messageId);
+        if (state && state.lastAudioPosition > 0) {
+          audio.currentTime = state.lastAudioPosition;
+          currentChunkIndex = Math.floor((state.lastAudioPosition / (audio.duration || 1)) * totalChunks);
+        }
+
+        // Set up event listeners
+        audio.addEventListener('ended', () => {
+          currentAudio = null;
+          currentMessageId = null;
+          audioCacheService.saveConversationState(
+            messageId,
+            messageId,
+            0,
+            'completed'
+          );
+          resolve();
+        });
+
+        audio.addEventListener('error', (error) => {
+          console.error('Error playing audio:', error);
+          reject(error);
+        });
+
+        // Buffer management
+        audio.addEventListener('progress', async () => {
+          const buffered = audio.buffered.length > 0 ? 
+            audio.buffered.end(audio.buffered.length - 1) : 0;
+          
+          // Load more chunks if buffer is running low
+          if (currentChunkIndex < totalChunks && 
+              buffered - audio.currentTime < BUFFER_THRESHOLD * CHUNK_SIZE) {
+            try {
+              // Load next chunk
+              const nextChunk = chunks[currentChunkIndex++];
+              if (nextChunk) {
+                const chunkUrl = URL.createObjectURL(nextChunk);
+                // Append to audio source
+                if (audio.src) {
+                  const existingBlob = await fetch(audio.src).then(r => r.blob());
+                  const newBlob = new Blob([existingBlob, nextChunk], { type: 'audio/mp3' });
+                  URL.revokeObjectURL(audio.src);
+                  audio.src = URL.createObjectURL(newBlob);
+                } else {
+                  audio.src = chunkUrl;
+                }
+              }
+            } catch (error) {
+              console.error('Error loading next chunk:', error);
+            }
+          }
+        });
+
+        // Start with first chunk
+        if (chunks.length > 0) {
+          audio.src = URL.createObjectURL(chunks[0]);
+          currentChunkIndex = 1;
+          
+          // Start playback
+          audio.play().catch(error => {
+            console.error('Error starting audio playback:', error);
+            reject(error);
+          });
+
+          // Save initial state
+          audioCacheService.saveConversationState(
+            messageId,
+            messageId,
+            0,
+            'playing'
+          );
+        }
+      }).catch(error => {
+        console.error('Error splitting audio into chunks:', error);
+        reject(error);
+      });
+    } catch (error) {
+      console.error('Error in playAudio:', error);
       reject(error);
-    };
-    
-    audio.play().catch(reject);
+    }
   });
 };
 
 /**
- * Converts audio blob to base64 string
+ * Stops currently playing audio and saves state
+ */
+export const stopAudio = async (): Promise<void> => {
+  if (currentAudio && currentMessageId) {
+    const currentTime = currentAudio.currentTime;
+    await audioCacheService.saveConversationState(
+      currentMessageId,
+      currentMessageId,
+      currentTime,
+      'paused'
+    );
+    currentAudio.pause();
+    currentAudio = null;
+    currentMessageId = null;
+  }
+};
+
+/**
+ * Helper function to convert a Blob to base64 string
  */
 export const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
       if (typeof reader.result === 'string') {
-        // Remove the data URL prefix (e.g., "data:audio/wav;base64,")
-        const base64 = reader.result.split(',')[1];
-        resolve(base64);
+        resolve(reader.result);
       } else {
-        reject(new Error('Failed to convert Blob to base64'));
+        reject(new Error('Failed to convert blob to base64'));
       }
     };
     reader.onerror = reject;

@@ -127,11 +127,14 @@ class SocketVadService {
       console.log(`[SocketVAD] Connecting to ${socketUrl}`);
 
       this.socket = io(socketUrl, {
-        transports: ['websocket'],
+        transports: ['websocket', 'polling'],  // Allow both websocket and polling as fallback
         reconnection: this.autoReconnect,
         reconnectionAttempts: this.maxReconnectAttempts,
         reconnectionDelay: this.reconnectDelay,
-        reconnectionDelayMax: 5000
+        reconnectionDelayMax: 5000,
+        path: '/socket.io/',  // Explicitly specify the Socket.IO path
+        forceNew: true,       // Force a new connection
+        timeout: 10000        // Increase timeout to 10 seconds
       });
 
       // Set up event listeners

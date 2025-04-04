@@ -110,6 +110,34 @@ Components are designed to be modular and reusable:
 
 ## Recent Changes
 
+### Integrated WebSocket-based Voice Activity Detection (VAD)
+
+**Change**: Integrated the WebSocket-based VAD system with the main conversation UI to improve speech detection accuracy.
+
+**Rationale**: The previous local VAD system using direct audio analysis in the browser had limitations in terms of accuracy and adaptability to different environments. The WebSocket-based approach leverages more powerful server-side processing to provide more accurate and reliable speech detection.
+
+**Implementation Details**:
+- Modified `useMentorCallEngine` hook to utilize the WebSocket VAD service instead of local VAD
+- Added a new option `useSocketVad` (default: true) to control which VAD system to use
+- Updated `ConversationUI` and `MentorCallUI` components to pass the WebSocket VAD option
+- Implemented proper session and connection management for WebSocket VAD
+- Maintained backward compatibility with local VAD for environments where WebSockets may be blocked
+- Created a unified audio level interface that works with both VAD systems
+
+**Technical Approach**:
+1. The `useSocketVad` hook establishes a WebSocket connection to the backend VAD service
+2. Audio data is streamed to the server for real-time processing
+3. The server uses an ensemble approach combining RMS-based and WebRTC VAD methods
+4. Speech detection events are sent back to the client via WebSocket
+5. The client responds to these events by capturing audio and processing transcriptions
+
+**Impact**: Users now experience:
+- More accurate speech detection across different devices and environments
+- Better adaptation to background noise levels
+- Reduced false positives/negatives in speech detection
+- More natural conversation flow with the Stoic mentors
+- Improved performance on mobile and lower-powered devices by offloading processing to the server
+
 ### Implemented OpenAI API Integration for Authentic Stoic Responses
 
 **Change**: Enhanced the backend to forward requests to the OpenAI API instead of generating mock responses.

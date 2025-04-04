@@ -1,51 +1,55 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSessionStore } from '../../state/sessionStore';
-import { useMicStream } from '../../hooks/useMicStream';
-import { transcribeAudio, requestMicrophonePermission } from '../../services/whisperService';
-import { generateSpeech, playAudio, blobToBase64 } from '../../services/ttsService';
+import { useMentorCallEngine } from '../../hooks/useMentorCallEngine';
+import { requestMicrophonePermission } from '../../services/whisperService';
 import { checkApiHealth } from '../../services/mentorService';
-import { generateResponse } from '../../services/api';
-import { sanitizeResponse } from '../../services/openaiService';
-import { Mentor } from '../../types';
+import { VAD_SETTINGS } from '../../constants/audioThresholds';
 
 const ConversationUI: React.FC = () => {
   // Global state
   const { 
-    currentMentor, 
-    isSpeaking, 
-    setIsSpeaking, 
-    setIsListening, 
-    addMessage, 
-    history 
+    currentMentor
   } = useSessionStore();
   
   // Force re-initialize component when mentor changes
   const [mentorKey, setMentorKey] = useState(currentMentor);
+  
+  // Local state for call mode
+  const [isCallActive, setIsCallActive] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  const [callDurationInterval, setCallDurationInterval] = useState<number | null>(null);
   
   // Update mentorKey when currentMentor changes
   useEffect(() => {
     if (mentorKey !== currentMentor) {
       console.log(`🔍 CONVERSATION UI - Mentor changed from ${mentorKey} to ${currentMentor}, reinitializing...`);
       setMentorKey(currentMentor);
-      
-      // Reset conversation state
-      setUserText('');
-      setMentorText('');
-      setError(null);
-      setIsProcessing(false);
     }
-  }, [currentMentor]);
+  }, [currentMentor, mentorKey]);
+  
+  // Mentor call engine with VAD
+  const {
+    userText,
+    mentorText,
+    isError,
+    errorMessage,
+    isRecording,
+    isSpeaking,
+    isVADActive,
+    startListening,
+    stopListening,
+    interruptMentor,
+    audioLevel
+  } = useMentorCallEngine({
+    enableVoiceActivity: true,
+    maxSilenceMs: VAD_SETTINGS.SILENCE_TIMEOUT_MS,
+    autoStart: false,
+    useSocketVad: true
+  });
   
   // Local state
-  const { isRecording, startRecording, stopRecording, getAudioBlob } = useMicStream();
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [isApiAvailable, setIsApiAvailable] = useState<boolean | null>(null);
-  const [userText, setUserText] = useState('');
-  const [mentorText, setMentorText] = useState('');
-  const [shouldProcessAudio, setShouldProcessAudio] = useState(false);
   const [micPermissionStatus, setMicPermissionStatus] = useState<string>('unknown');
-  const wasRecording = useRef(false);
   
   // Check API health on mount
   useEffect(() => {
@@ -57,180 +61,64 @@ const ConversationUI: React.FC = () => {
     checkApi();
   }, []);
   
-  // Process audio when recording stops
-  useEffect(() => {
-    if (!isRecording && wasRecording.current) {
-      setTimeout(() => {
-        setShouldProcessAudio(true);
-      }, 500);
-      wasRecording.current = false;
-    } else if (isRecording) {
-      wasRecording.current = true;
-    }
-  }, [isRecording]);
+  // Handle call start/end
+  const startCall = async () => {
+    setIsCallActive(true);
+    
+    // Start the call duration timer
+    const intervalId = window.setInterval(() => {
+      setCallDuration(prev => prev + 1);
+    }, 1000);
+    setCallDurationInterval(intervalId);
+    
+    // Start listening
+    await startListening();
+  };
   
-  // Handle recording state changes
-  useEffect(() => {
+  const endCall = () => {
+    setIsCallActive(false);
+    
+    // Clear the call duration timer
+    if (callDurationInterval) {
+      window.clearInterval(callDurationInterval);
+      setCallDurationInterval(null);
+    }
+    
+    // Reset call duration
+    setCallDuration(0);
+    
+    // Stop listening if still active
     if (isRecording) {
-      setIsListening(true);
-    } else {
-      setIsListening(false);
-    }
-  }, [isRecording, setIsListening]);
-  
-  // Process audio when recording stops
-  const processAudio = useCallback(async () => {
-    if (isProcessing) return;
-    
-    if (!isApiAvailable) {
-      const isAvailableNow = await checkApiHealth();
-      
-      if (!isAvailableNow) {
-        return;
-      } else {
-        setIsApiAvailable(true);
-      }
-    }
-    
-    setIsProcessing(true);
-    setError(null);
-    setShouldProcessAudio(false);
-    
-    try {
-      // Get recorded audio
-      const audioBlob = await getAudioBlob();
-      if (!audioBlob) {
-        throw new Error('No audio recorded');
-      }
-      
-      // Transcribe audio to text
-      const transcriptionOptions = {
-        language: 'en',
-        prompt: 'This is a conversation about Stoic philosophy and philosophical guidance.',
-        temperature: 0.2
-      };
-      
-      const transcription = await transcribeAudio(audioBlob, transcriptionOptions);
-      setUserText(transcription);
-      
-      // Add user message to history
-      addMessage({
-        role: 'user',
-        content: transcription,
-        timestamp: Date.now(),
-      });
-      
-      // Get the current mentor from the store to ensure we have the latest value
-      const currentState = useSessionStore.getState();
-      const latestMentor = currentState.currentMentor;
-      console.log(`🔍 CONVERSATION UI - Processing audio for mentor: ${latestMentor} (verifying it matches UI state: ${currentMentor})`);
-      
-      // If there's a mismatch, log it but continue with the store value
-      if (latestMentor !== currentMentor) {
-        console.warn(`🔍 CONVERSATION UI - WARNING: Current mentor in UI (${currentMentor}) does not match store (${latestMentor})`);
-      }
-      
-      // Convert previous responses to context
-      const context = await Promise.all(
-        history
-          .filter(msg => msg.role === 'mentor')
-          .slice(-3)
-          .map(async (msg) => {
-            return {
-              text: msg.content,
-              speaker: latestMentor === 'marcus' ? 0 : latestMentor === 'seneca' ? 1 : 2,
-              audio: 'base64audio'
-            };
-          })
-      );
-      
-      // Generate mentor response
-      setIsSpeaking(true);
-      
-      // Call the actual LLM through our API instead of using a hardcoded response
-      console.log('🔍 Generating actual response using API with text:', transcription);
-      
-      try {
-        // Convert mentor name to proper format for API
-        const mentorName = latestMentor.charAt(0).toUpperCase() + latestMentor.slice(1);
-        const mentorObj = { name: mentorName } as Mentor;
-        
-        // Call the proper API function to get the mentor's response
-        const rawResponse = await generateResponse(transcription, mentorObj);
-        
-        // Sanitize the response to remove acknowledgment phrases
-        const response = sanitizeResponse(rawResponse);
-        
-        console.log('🔍 Received response from API:', response.substring(0, 100) + '...');
-        
-        setMentorText(response);
-        
-        // Add mentor message to history
-        addMessage({
-          role: 'mentor',
-          content: response,
-          timestamp: Date.now(),
-        });
-        
-        // Generate and play audio
-        const speakerId = latestMentor === 'marcus' ? 0 : latestMentor === 'seneca' ? 1 : 2;
-        console.log(`🔍 CONVERSATION UI - Using speaker ID: ${speakerId} for mentor: ${latestMentor}`);
-        const audioResponse = await generateSpeech(response, speakerId, context);
-        
-        // Convert to base64 for future use
-        await blobToBase64(audioResponse);
-        
-        // Play the audio
-        await playAudio(audioResponse);
-        setIsSpeaking(false);
-      } catch (err) {
-        console.error('Error generating mentor response:', err);
-        setError(`Failed to generate response: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        setIsSpeaking(false);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      setError(`Error: ${errorMessage}`);
-      setIsSpeaking(false);
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [
-    isProcessing, 
-    isApiAvailable, 
-    getAudioBlob, 
-    addMessage, 
-    history, 
-    currentMentor, 
-    setIsSpeaking,
-    setUserText,
-    setMentorText
-  ]);
-  
-  // Process audio when flag is set
-  useEffect(() => {
-    if (shouldProcessAudio && !isProcessing) {
-      processAudio();
-    }
-  }, [shouldProcessAudio, isProcessing, processAudio]);
-  
-  // Toggle recording
-  const handleToggleRecording = async () => {
-    try {
-      if (isRecording) {
-        stopRecording();
-      } else {
-        setUserText('');
-        setMentorText('');
-        await startRecording();
-      }
-    } catch {
-      setError(`Failed to access microphone. Please check permissions.`);
+      stopListening();
     }
   };
   
-  // Test microphone permissions
-  const testMicrophonePermission = async () => {
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (callDurationInterval) {
+        window.clearInterval(callDurationInterval);
+      }
+    };
+  }, [callDurationInterval]);
+  
+  // Format call duration as mm:ss
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+  
+  // Helper function to get color based on audio level
+  const getAudioLevelColor = () => {
+    if (!isRecording) return '#6b7280'; // gray
+    if (audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD) return '#ef4444'; // red
+    if (audioLevel < 0.2) return '#f59e0b'; // yellow
+    return '#10b981'; // green
+  };
+  
+  // Add microphone test button to UI and make the function used
+  const handleTestMicrophone = async () => {
     try {
       setMicPermissionStatus('checking...');
       const result = await requestMicrophonePermission();
@@ -242,141 +130,312 @@ const ConversationUI: React.FC = () => {
 
   return (
     <div style={{ width: '100%' }}>
+      {/* Status bar */}
       <div style={{ 
         fontSize: '13px', 
         color: '#6b7280', 
-        marginBottom: '8px' 
-      }}>
-        Mic Status: {micPermissionStatus === 'unknown' ? 'pending' : micPermissionStatus}
-      </div>
-      
-      <div style={{ 
-        border: '1px solid #e5e7eb', 
-        borderRadius: '8px', 
-        padding: '16px', 
-        marginBottom: '20px',
-        minHeight: '200px',
-        backgroundColor: 'white'
-      }}>
-        {userText && (
-          <div style={{ 
-            marginBottom: '16px',
-            display: 'flex',
-            justifyContent: 'flex-end'
-          }}>
-            <div style={{ 
-              backgroundColor: '#e9ecef', 
-              borderRadius: '12px 12px 0 12px',
-              padding: '10px 14px',
-              maxWidth: '80%'
-            }}>
-              {userText}
-            </div>
-          </div>
-        )}
-        
-        {!userText && !mentorText && (
-          <div style={{ 
-            color: '#9ca3af', 
-            textAlign: 'center',
-            marginTop: '40px'
-          }}>
-            Ask me something about stoicism...
-          </div>
-        )}
-        
-        {mentorText && (
-          <div style={{ 
-            marginBottom: '16px',
-            display: 'flex',
-            justifyContent: 'flex-start'
-          }}>
-            <div style={{ 
-              backgroundColor: '#f8f9fa', 
-              borderRadius: '12px 12px 12px 0',
-              padding: '10px 14px',
-              maxWidth: '80%',
-              border: '1px solid #e9ecef'
-            }}>
-              {mentorText}
-            </div>
-          </div>
-        )}
-      </div>
-      
-      <div style={{ 
+        marginBottom: '8px',
         display: 'flex',
-        justifyContent: 'center',
-        marginBottom: '20px' 
+        justifyContent: 'space-between'
       }}>
+        <span>
+          Mic Status: {micPermissionStatus === 'unknown' ? 'pending' : micPermissionStatus}
+          {isApiAvailable === null && ' | API: Checking...'}
+          {isApiAvailable === false && ' | API: Offline'}
+          {isApiAvailable === true && ' | API: Online'}
+          {isCallActive && ' | Call Duration: ' + formatDuration(callDuration)}
+        </span>
         <button
-          onClick={handleToggleRecording}
-          disabled={isProcessing || isSpeaking}
+          onClick={handleTestMicrophone}
           style={{
-            backgroundColor: '#f8f9fa',
-            border: '1px solid #e9ecef',
-            borderRadius: '24px',
-            padding: '12px 24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: (isProcessing || isSpeaking) ? 'not-allowed' : 'pointer',
-            opacity: (isProcessing || isSpeaking) ? 0.7 : 1,
-            transition: 'all 0.2s ease',
-            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.05)'
-          }}
-        >
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            style={{ 
-              width: '20px',
-              height: '20px',
-              marginRight: '8px',
-              color: isRecording ? '#e53e3e' : '#4b5563'
-            }}
-            fill="none" 
-            viewBox="0 0 24 24" 
-            stroke="currentColor"
-          >
-            <path 
-              strokeLinecap="round" 
-              strokeLinejoin="round" 
-              strokeWidth={2} 
-              d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" 
-            />
-          </svg>
-          <span style={{ fontSize: '14px', fontWeight: 500 }}>
-            {isRecording ? 'Stop Recording' : isProcessing ? 'Processing...' : isSpeaking ? 'Listening...' : 'Click to Speak'}
-          </span>
-        </button>
-      </div>
-      
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <button 
-          onClick={testMicrophonePermission} 
-          style={{
-            backgroundColor: 'transparent',
+            background: 'transparent',
             border: 'none',
             fontSize: '13px',
             color: '#6b7280',
             cursor: 'pointer',
-            padding: '4px 8px'
+            textDecoration: 'underline'
           }}
         >
-          Test Microphone
+          Test Mic
         </button>
       </div>
       
-      {error && (
-        <div style={{
-          color: '#e53e3e',
-          marginTop: '12px',
-          fontSize: '13px',
-          textAlign: 'center'
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '20px',
+        padding: '20px',
+        maxWidth: '800px',
+        margin: '0 auto',
+        background: '#f9fafb',
+        borderRadius: '12px',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24)'
+      }}>
+        {/* Call control buttons */}
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'center',
+          marginBottom: '20px',
+          gap: '16px'
         }}>
-          {error}
+          {!isCallActive ? (
+            <button 
+              onClick={startCall}
+              style={{
+                padding: '12px 24px',
+                background: '#10b981',
+                color: 'white',
+                border: 'none',
+                borderRadius: '50px',
+                cursor: 'pointer',
+                fontSize: '16px',
+                fontWeight: 'bold',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              <span>Call {currentMentor.charAt(0).toUpperCase() + currentMentor.slice(1)}</span>
+              {/* Phone icon */}
+              <svg 
+                width="20" 
+                height="20" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2"
+                strokeLinecap="round" 
+                strokeLinejoin="round"
+              >
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+              </svg>
+            </button>
+          ) : (
+            <>
+              <button 
+                onClick={endCall}
+                style={{
+                  padding: '12px 24px',
+                  background: '#ef4444',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '50px',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <span>End Call</span>
+                {/* Phone icon with slash */}
+                <svg 
+                  width="20" 
+                  height="20" 
+                  viewBox="0 0 24 24" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2"
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                >
+                  <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+              </button>
+              
+              {isSpeaking && (
+                <button
+                  onClick={interruptMentor}
+                  style={{
+                    padding: '12px 24px',
+                    background: '#f97316',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '50px',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <span>Interrupt</span>
+                  <svg 
+                    width="20" 
+                    height="20" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2"
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                  >
+                    <rect x="3" y="11" width="18" height="2" rx="1"></rect>
+                  </svg>
+                </button>
+              )}
+            </>
+          )}
+        </div>
+        
+        {/* Call status indicator */}
+        {isCallActive && (
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '5px',
+            marginBottom: '10px'
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              color: isSpeaking ? '#10b981' : isRecording ? '#f59e0b' : '#6b7280'
+            }}>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                background: isSpeaking ? '#10b981' : isRecording ? '#f59e0b' : '#6b7280',
+                animation: (isSpeaking || isRecording) ? 'pulse 1.5s infinite' : 'none'
+              }}></div>
+              {isSpeaking ? 'Mentor Speaking' : isRecording ? 'Listening...' : 'Call Connected'}
+            </div>
+            
+            {/* Audio level visualization */}
+            {isRecording && (
+              <div style={{
+                width: '80%',
+                height: '8px',
+                background: '#e5e7eb',
+                borderRadius: '4px',
+                overflow: 'hidden',
+                marginTop: '5px'
+              }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.min(audioLevel * 100, 100)}%`,
+                  background: getAudioLevelColor(),
+                  transition: 'width 0.1s ease, background-color 0.1s ease'
+                }}></div>
+              </div>
+            )}
+            
+            {/* VAD Status */}
+            {isVADActive && isRecording && (
+              <div style={{ 
+                fontSize: '12px', 
+                color: audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD ? '#ef4444' : '#10b981',
+                fontWeight: audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD ? 'bold' : 'normal'
+              }}>
+                {audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD ? '🔴 Silence Detected' : '🔊 Voice Detected'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* User text box */}
+        <div style={{
+          padding: '16px',
+          borderRadius: '8px',
+          background: 'white',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+          minHeight: '60px'
+        }}>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#4b5563' }}>
+            You {isRecording && '(speaking...)'}
+          </h3>
+          <div style={{ fontSize: '16px' }}>
+            {userText || <em style={{ color: '#9ca3af' }}>Your transcribed speech will appear here...</em>}
+          </div>
+        </div>
+        
+        {/* Mentor text box */}
+        <div style={{
+          padding: '16px',
+          borderRadius: '8px',
+          background: '#f0f9ff',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+          minHeight: '60px'
+        }}>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: '#4b5563' }}>
+            {currentMentor.charAt(0).toUpperCase() + currentMentor.slice(1)} {isSpeaking && '(speaking...)'}
+          </h3>
+          <div style={{ fontSize: '16px' }}>
+            {mentorText || <em style={{ color: '#9ca3af' }}>Mentor's response will appear here...</em>}
+          </div>
+        </div>
+        
+        {/* Error display */}
+        {isError && (
+          <div style={{
+            padding: '12px',
+            background: '#fee2e2',
+            color: '#b91c1c',
+            borderRadius: '4px',
+            fontSize: '14px'
+          }}>
+            Error: {errorMessage}
+          </div>
+        )}
+      </div>
+      
+      {/* Debug Info - only show during active calls */}
+      {isCallActive && (
+        <div style={{
+          marginTop: '20px',
+          padding: '10px',
+          background: '#f3f4f6',
+          borderRadius: '8px',
+          fontSize: '12px',
+          color: '#4b5563',
+          maxWidth: '800px',
+          margin: '20px auto 0'
+        }}>
+          <h4 style={{ margin: '0 0 8px 0', fontSize: '14px' }}>Call Debug Info</h4>
+          <div>Call Duration: {formatDuration(callDuration)}</div>
+          <div>VAD Active: <span style={{ color: isVADActive ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
+            {isVADActive ? 'Yes' : 'No'}
+          </span></div>
+          <div>Current Audio Level: <span style={{ 
+            color: audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD ? '#ef4444' : '#10b981', 
+            fontWeight: 'bold' 
+          }}>
+            {(audioLevel * 100).toFixed(1)}%
+          </span></div>
+          <div>Silence Threshold: {(VAD_SETTINGS.SILENCE_THRESHOLD * 100).toFixed(1)}%</div>
+          <div>Silence Timeout: {VAD_SETTINGS.SILENCE_TIMEOUT_MS}ms</div>
+          <div>Is silence detected: <span style={{ 
+            color: audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD ? '#ef4444' : '#10b981',
+            fontWeight: 'bold'
+          }}>
+            {audioLevel < VAD_SETTINGS.SILENCE_THRESHOLD ? 'YES' : 'No'}
+          </span></div>
+          <div>Recording State: {isRecording ? 'Active' : 'Inactive'}</div>
+          <div>Speaking State: {isSpeaking ? 'Mentor Speaking' : 'Mentor Silent'}</div>
         </div>
       )}
+      
+      {/* CSS for the pulse animation */}
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1; }
+          }
+        `
+      }} />
     </div>
   );
 };

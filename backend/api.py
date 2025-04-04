@@ -27,10 +27,40 @@ else:
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # Enable Cross-Origin Resource Sharing
 
-# Initialize SocketIO with CORS support
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Enable CORS with more specific configuration
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "http://localhost:5173",    # Vite dev server
+            "http://127.0.0.1:5173",    # Alternative localhost
+            "http://localhost:5174",    # Additional Vite dev server port
+            "http://127.0.0.1:5174",    # Alternative additional port
+            "http://localhost:5001",    # Backend
+            "http://127.0.0.1:5001",    # Alternative backend
+            "http://localhost:5002",    # Current backend port
+            "http://127.0.0.1:5002"     # Alternative current backend port
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+    }
+})
+
+# Initialize SocketIO with CORS support for multiple origins
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:5001",
+        "http://127.0.0.1:5001",
+        "http://localhost:5002",
+        "http://127.0.0.1:5002"
+    ], 
+    async_mode='eventlet'
+)
 
 # Global constants
 TEMP_DIR = tempfile.gettempdir()
@@ -41,6 +71,8 @@ AUDIO_SAMPLE_RATE = 24000
 def handle_connect():
     """Handle new WebSocket connections."""
     print(f"[SocketIO] New client connected: {request.sid}")
+    print(f"[SocketIO] Connection details: Origin: {request.origin}, Transport: {request.environ.get('HTTP_SEC_WEBSOCKET_KEY', 'N/A')}")
+    print(f"[SocketIO] Headers: {request.headers}")
     emit('connected', {'status': 'connected', 'sid': request.sid})
 
 @socketio.on('disconnect')
@@ -51,6 +83,9 @@ def handle_disconnect():
     session_id = request.args.get('session_id')
     if session_id:
         socket_vad_service.remove_session(session_id)
+        print(f"[SocketIO] Removed session: {session_id}")
+    else:
+        print(f"[SocketIO] No session ID found for cleanup")
 
 @socketio.on('init_vad')
 def handle_init_vad(data):
@@ -561,88 +596,129 @@ def create_system_prompt(mentor):
 
 @app.route('/api/audio-analysis', methods=['POST'])
 def audio_analysis():
-    """Analyze audio level for speech detection using adaptive thresholding."""
+    """Process audio level data for speech detection."""
     try:
-        # Get JSON data from request
         data = request.json
-        if not data or 'audioLevel' not in data:
-            return jsonify({"error": "No audio level provided"}), 400
-            
-        audio_level = float(data.get('audioLevel'))
+        if not data or 'level' not in data:
+            return jsonify({"error": "Missing 'level' in request"}), 400
+        
+        # Process the audio sample
         timestamp = data.get('timestamp')
+        result = audio_analysis_service.add_audio_sample(data['level'], timestamp)
         
-        # Process with audio analysis service
-        result = audio_analysis_service.add_audio_sample(audio_level, timestamp)
-        
-        return jsonify(result)
+        # Add CORS headers to the response
+        response = jsonify(result)
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
         
     except Exception as e:
-        print(f"[AUDIO_ANALYSIS] Error in audio analysis endpoint: {e}")
+        print(f"Error in audio analysis: {e}")
         print(traceback.format_exc())
-        return jsonify({"error": f"Failed to analyze audio: {str(e)}"}), 500
+        response = jsonify({"error": str(e)}), 500
+        response[0].headers.add('Access-Control-Allow-Origin', '*')
+        response[0].headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response[0].headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
 
 @app.route('/api/audio-analysis/calibrate', methods=['POST'])
 def force_calibration():
     """Force recalibration of the audio analysis service."""
     try:
         audio_analysis_service.force_recalibration()
-        return jsonify({"status": "Calibration started"})
-        
+        response = jsonify({"status": "success", "message": "Recalibration started"})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     except Exception as e:
-        print(f"[AUDIO_ANALYSIS] Error in force calibration endpoint: {e}")
+        print(f"Error in force calibration: {e}")
         print(traceback.format_exc())
-        return jsonify({"error": f"Failed to start calibration: {str(e)}"}), 500
+        response = jsonify({"error": str(e)}), 500
+        response[0].headers.add('Access-Control-Allow-Origin', '*')
+        response[0].headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response[0].headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
 
 @app.route('/api/audio-analysis/threshold', methods=['GET'])
 def get_threshold():
-    """Get the current threshold value from audio analysis service."""
+    """Get the current audio analysis threshold."""
     try:
         threshold = audio_analysis_service.get_current_threshold()
-        noise_profile = audio_analysis_service.get_noise_profile()
+        noise_floor = audio_analysis_service._noise_floor
+        std_dev = audio_analysis_service._std_dev
         
-        return jsonify({
+        response = jsonify({
             "threshold": threshold,
-            "noiseProfile": noise_profile
+            "noise_floor": noise_floor,
+            "std_dev": std_dev,
+            "is_calibrating": audio_analysis_service.is_calibrating()
         })
-        
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     except Exception as e:
-        print(f"[AUDIO_ANALYSIS] Error in get threshold endpoint: {e}")
+        print(f"Error in get threshold: {e}")
         print(traceback.format_exc())
-        return jsonify({"error": f"Failed to get threshold: {str(e)}"}), 500
+        response = jsonify({"error": str(e)}), 500
+        response[0].headers.add('Access-Control-Allow-Origin', '*')
+        response[0].headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response[0].headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
 
 @app.route('/api/audio-analysis/config', methods=['PUT'])
 def update_config():
     """Update the audio analysis service configuration."""
     try:
-        # Get JSON data from request
-        data = request.json
-        if not data:
-            return jsonify({"error": "No configuration provided"}), 400
-            
-        # Update service configuration
-        audio_analysis_service.update_config(data)
+        config = request.json
+        if not config:
+            return jsonify({"error": "Missing configuration data"}), 400
         
-        return jsonify({"status": "Configuration updated"})
+        audio_analysis_service.update_config(config)
         
+        response = jsonify({"status": "success", "message": "Configuration updated"})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     except Exception as e:
-        print(f"[AUDIO_ANALYSIS] Error in update config endpoint: {e}")
+        print(f"Error in update config: {e}")
         print(traceback.format_exc())
-        return jsonify({"error": f"Failed to update configuration: {str(e)}"}), 500
+        response = jsonify({"error": str(e)}), 500
+        response[0].headers.add('Access-Control-Allow-Origin', '*')
+        response[0].headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response[0].headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
 
 @app.route('/api/audio-analysis/debug', methods=['GET'])
 def get_debug_state():
-    """Get debug state from audio analysis service."""
+    """Get the debug state from the audio analysis service."""
     try:
         debug_state = audio_analysis_service.get_debug_state()
-        if debug_state is None:
-            return jsonify({"error": "Debug mode not enabled"}), 400
-            
-        return jsonify(debug_state)
-        
+        response = jsonify(debug_state if debug_state else {})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
     except Exception as e:
-        print(f"[AUDIO_ANALYSIS] Error in get debug state endpoint: {e}")
+        print(f"Error in get debug state: {e}")
         print(traceback.format_exc())
-        return jsonify({"error": f"Failed to get debug state: {str(e)}"}), 500
+        response = jsonify({"error": str(e)}), 500
+        response[0].headers.add('Access-Control-Allow-Origin', '*')
+        response[0].headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response[0].headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
+
+@app.route('/socket.io/', methods=['OPTIONS'])
+def handle_socket_io_options():
+    """Handle CORS preflight requests for socket.io."""
+    response = jsonify({"status": "ok"})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    return response
 
 if __name__ == "__main__":
     # Run the app with SocketIO

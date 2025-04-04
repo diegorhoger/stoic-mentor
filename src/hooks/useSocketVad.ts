@@ -357,8 +357,9 @@ export function useSocketVad(options: UseSocketVadOptions = {}): UseSocketVadRes
         micStreamRef.current.getTracks().forEach(track => track.stop());
       }
       
-      // Disconnect from WebSocket
-      disconnect();
+      // Don't disconnect from WebSocket when component unmounts
+      // This prevents connection cycling issues during component rerendering
+      // disconnect();
     };
   }, [autoConnect, autoInit, connect, initVad, stopAudioProcessing, disconnect]);
 
@@ -376,10 +377,45 @@ export function useSocketVad(options: UseSocketVadOptions = {}): UseSocketVadRes
     // Update status when connection state changes
     socketVadService.on(SocketVadEvent.CONNECTED, updateStatus);
     
+    // Set up listeners for speaking events
+    const handleVadResult = (data: VadResult) => {
+      setAudioLevel(data.rms_level);
+      setThreshold(data.threshold);
+      setIsSpeaking(data.is_speech);
+      
+      // Fire the callback if provided
+      if (onSpeakingChange && data.is_speech !== isSpeaking) {
+        onSpeakingChange(data.is_speech);
+      }
+    };
+    
+    const handleSpeechStart = (data: SpeechStartEvent) => {
+      console.log('[useSocketVad] Speech start event received', data);
+      setIsSpeaking(true);
+      if (onSpeakingChange) {
+        onSpeakingChange(true);
+      }
+    };
+    
+    const handleSpeechEnd = (data: SpeechEndEvent) => {
+      console.log('[useSocketVad] Speech end event received', data);
+      setIsSpeaking(false);
+      if (onSpeakingChange) {
+        onSpeakingChange(false);
+      }
+    };
+    
+    socketVadService.on(SocketVadEvent.VAD_RESULT, handleVadResult);
+    socketVadService.on(SocketVadEvent.SPEECH_START, handleSpeechStart);
+    socketVadService.on(SocketVadEvent.SPEECH_END, handleSpeechEnd);
+    
     return () => {
       socketVadService.off(SocketVadEvent.CONNECTED, updateStatus);
+      socketVadService.off(SocketVadEvent.VAD_RESULT, handleVadResult);
+      socketVadService.off(SocketVadEvent.SPEECH_START, handleSpeechStart);
+      socketVadService.off(SocketVadEvent.SPEECH_END, handleSpeechEnd);
     };
-  }, []);
+  }, [isSpeaking, onSpeakingChange]);
 
   return {
     isConnected,
