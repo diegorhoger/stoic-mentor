@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket VAD Client Example</title>
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #f0f0f0;
+            min-height: 40px;
+        }
+        .speaking {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .silent {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .debug {
+            font-family: monospace;
+            white-space: pre-wrap;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            height: 300px;
+            overflow-y: auto;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0069d9;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .level-indicator {
+            height: 20px;
+            width: 300px;
+            background-color: #e9ecef;
+            position: relative;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .level-fill {
+            height: 100%;
+            width: 0%;
+            background-color: #28a745;
+            position: absolute;
+            transition: width 0.1s;
+        }
+        .threshold-line {
+            height: 100%;
+            width: 2px;
+            background-color: #dc3545;
+            position: absolute;
+            transition: left 0.5s;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket VAD Client Example</h1>
+    
+    <div class="container">
+        <div class="controls">
+            <button id="connectBtn">Connect</button>
+            <button id="startBtn" disabled>Start Microphone</button>
+            <button id="stopBtn" disabled>Stop Microphone</button>
+            <button id="calibrateBtn" disabled>Force Calibration</button>
+        </div>
+        
+        <div>
+            <label for="sensitivity">Sensitivity:</label>
+            <input type="range" id="sensitivity" min="0.5" max="3" step="0.1" value="1.5" disabled>
+            <span id="sensitivityValue">1.5</span>
+        </div>
+        
+        <div>
+            <label for="aggressiveness">WebRTC Aggressiveness:</label>
+            <select id="aggressiveness" disabled>
+                <option value="0">0 (Least aggressive)</option>
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3 (Most aggressive)</option>
+            </select>
+        </div>
+        
+        <div class="status" id="status">Not connected</div>
+        
+        <div>
+            <p>Audio Level:</p>
+            <div class="level-indicator">
+                <div class="level-fill" id="levelFill"></div>
+                <div class="threshold-line" id="thresholdLine"></div>
+            </div>
+        </div>
+        
+        <div>
+            <p>Debug Information:</p>
+            <div class="debug" id="debug"></div>
+        </div>
+    </div>
+    
+    <script>
+        // DOM Elements
+        const connectBtn = document.getElementById('connectBtn');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const calibrateBtn = document.getElementById('calibrateBtn');
+        const sensitivityInput = document.getElementById('sensitivity');
+        const sensitivityValue = document.getElementById('sensitivityValue');
+        const aggressivenessSelect = document.getElementById('aggressiveness');
+        const statusEl = document.getElementById('status');
+        const levelFill = document.getElementById('levelFill');
+        const thresholdLine = document.getElementById('thresholdLine');
+        const debugEl = document.getElementById('debug');
+        
+        // State variables
+        let socket = null;
+        let sessionId = null;
+        let audioContext = null;
+        let microphone = null;
+        let processor = null;
+        let isSpeaking = false;
+        
+        // Connect to WebSocket server
+        connectBtn.addEventListener('click', async () => {
+            try {
+                // Create Socket.IO connection
+                socket = io('http://localhost:5001', {
+                    transports: ['websocket'],
+                    reconnection: true,
+                    reconnectionAttempts: 5
+                });
+                
+                // Socket event handlers
+                setupSocketEvents();
+                
+                connectBtn.disabled = true;
+                log('Connecting to WebSocket server...');
+                
+            } catch (error) {
+                log(`Error connecting: ${error.message}`);
+            }
+        });
+        
+        // Initialize WebAudio API
+        startBtn.addEventListener('click', async () => {
+            try {
+                // Request microphone access
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        channelCount: 1,
+                        sampleRate: 16000
+                    },
+                    video: false
+                });
+                
+                // Set up audio processing
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+                
+                microphone = audioContext.createMediaStreamSource(stream);
+                processor = audioContext.createScriptProcessor(1024, 1, 1);
+                
+                // Process audio
+                processor.onaudioprocess = (e) => processAudio(e);
+                
+                // Connect the audio graph
+                microphone.connect(processor);
+                processor.connect(audioContext.destination);
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                log('Microphone started');
+                
+            } catch (error) {
+                log(`Microphone error: ${error.message}`);
+            }
+        });
+        
+        // Stop recording
+        stopBtn.addEventListener('click', () => {
+            if (audioContext && microphone && processor) {
+                microphone.disconnect();
+                processor.disconnect();
+                audioContext = null;
+                microphone = null;
+                processor = null;
+                
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                log('Microphone stopped');
+            }
+        });
+        
+        // Force calibration
+        calibrateBtn.addEventListener('click', () => {
+            if (socket && sessionId) {
+                socket.emit('force_recalibration', { session_id: sessionId });
+                log('Forcing calibration...');
+            }
+        });
+        
+        // Update sensitivity
+        sensitivityInput.addEventListener('input', () => {
+            const value = parseFloat(sensitivityInput.value);
+            sensitivityValue.textContent = value.toFixed(1);
+            
+            if (socket && sessionId) {
+                socket.emit('update_vad_config', {
+                    session_id: sessionId,
+                    config: {
+                        rms_vad_config: {
+                            initial_sensitivity_factor: value
+                        }
+                    }
+                });
+            }
+        });
+        
+        // Update WebRTC aggressiveness
+        aggressivenessSelect.addEventListener('change', () => {
+            const value = parseInt(aggressivenessSelect.value);
+            
+            if (socket && sessionId) {
+                socket.emit('update_vad_config', {
+                    session_id: sessionId,
+                    config: {
+                        aggressiveness: value
+                    }
+                });
+            }
+        });
+        
+        // Set up Socket.IO event handlers
+        function setupSocketEvents() {
+            socket.on('connect', () => {
+                log(`Connected to server, socket ID: ${socket.id}`);
+                
+                // Initialize VAD session
+                socket.emit('init_vad', {});
+            });
+            
+            socket.on('disconnect', () => {
+                log('Disconnected from server');
+                connectBtn.disabled = false;
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+                calibrateBtn.disabled = true;
+                sensitivityInput.disabled = true;
+                aggressivenessSelect.disabled = true;
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status';
+            });
+            
+            socket.on('error', (data) => {
+                log(`Server error: ${data.message}`);
+            });
+            
+            socket.on('vad_initialized', (data) => {
+                sessionId = data.session_id;
+                log(`VAD session initialized: ${sessionId}`);
+                
+                // Update UI
+                startBtn.disabled = false;
+                calibrateBtn.disabled = false;
+                sensitivityInput.disabled = false;
+                aggressivenessSelect.disabled = false;
+                
+                // Set initial values from server
+                if (data.noise_profile) {
+                    updateThresholdIndicator(data.noise_profile.threshold);
+                }
+                
+                // Update sensitivity value if provided
+                if (data.config && data.config.initial_sensitivity_factor) {
+                    sensitivityInput.value = data.config.initial_sensitivity_factor;
+                    sensitivityValue.textContent = data.config.initial_sensitivity_factor.toFixed(1);
+                }
+                
+                // Update aggressiveness if provided
+                if (data.config && data.config.aggressiveness !== undefined) {
+                    aggressivenessSelect.value = data.config.aggressiveness;
+                }
+                
+                // Get initial debug state
+                socket.emit('get_debug_state', { session_id: sessionId });
+            });
+            
+            socket.on('vad_result', (data) => {
+                // Update level indicators
+                if (data.rms_level !== undefined) {
+                    updateLevelIndicator(data.rms_level);
+                }
+                
+                if (data.threshold !== undefined) {
+                    updateThresholdIndicator(data.threshold);
+                }
+            });
+            
+            socket.on('speech_start', (data) => {
+                log(`Speech detected at ${new Date(data.timestamp).toLocaleTimeString()}`);
+                isSpeaking = true;
+                statusEl.textContent = 'Speaking detected';
+                statusEl.className = 'status speaking';
+            });
+            
+            socket.on('speech_end', (data) => {
+                log(`Speech ended at ${new Date(data.timestamp).toLocaleTimeString()}, duration: ${data.duration_ms}ms`);
+                isSpeaking = false;
+                statusEl.textContent = 'Silent';
+                statusEl.className = 'status silent';
+            });
+            
+            socket.on('calibration_started', () => {
+                log('Calibration started');
+            });
+            
+            socket.on('calibration_complete', (data) => {
+                log('Calibration complete');
+                if (data.noise_profile) {
+                    log(`New noise profile: ${JSON.stringify(data.noise_profile)}`);
+                }
+            });
+            
+            socket.on('config_updated', (data) => {
+                log(`Configuration updated: ${JSON.stringify(data.config)}`);
+            });
+            
+            socket.on('debug_state', (data) => {
+                // This can be used to show more detailed info in the UI
+                console.log('Debug state:', data);
+            });
+        }
+        
+        // Process audio and send to server
+        function processAudio(e) {
+            if (!socket || !sessionId) return;
+            
+            // Get audio data from buffer
+            const inputData = e.inputBuffer.getChannelData(0);
+            
+            // Convert to 16-bit PCM
+            const pcmData = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+            }
+            
+            // Convert to Uint8Array
+            const buffer = new Uint8Array(pcmData.buffer);
+            
+            // Convert to base64
+            const base64Audio = arrayBufferToBase64(buffer);
+            
+            // Send to server
+            socket.emit('process_audio', {
+                session_id: sessionId,
+                audio: base64Audio
+            });
+            
+            // Calculate RMS for local visualization
+            const rms = Math.sqrt(
+                inputData.reduce((acc, val) => acc + val * val, 0) / inputData.length
+            );
+            
+            // Update level indicator (local, will be overridden by server values)
+            updateLevelIndicator(rms);
+        }
+        
+        // Update level indicator
+        function updateLevelIndicator(level) {
+            const percentage = Math.min(100, level * 100 * 3); // Scale for better visibility
+            levelFill.style.width = `${percentage}%`;
+        }
+        
+        // Update threshold indicator
+        function updateThresholdIndicator(threshold) {
+            const percentage = Math.min(100, threshold * 100 * 3); // Scale for better visibility
+            thresholdLine.style.left = `${percentage}%`;
+        }
+        
+        // Convert ArrayBuffer to base64
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            const len = bytes.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return window.btoa(binary);
+        }
+        
+        // Log message to debug area
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            debugEl.innerHTML += `[${timestamp}] ${message}\n`;
+            debugEl.scrollTop = debugEl.scrollHeight;
+        }
+    </script>
+</body>
+</html> 

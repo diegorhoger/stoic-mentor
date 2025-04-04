@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Expose the port the app runs on
-EXPOSE 5002
+EXPOSE 5001
 
-# Command to run the app
+# Command to run the app directly with Python
 CMD ["python", "api.py"] 

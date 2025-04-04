@@ -3,11 +3,15 @@ import io
 import tempfile
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, disconnect
 from werkzeug.utils import secure_filename
 import traceback
 import openai
 from dotenv import load_dotenv
 import pathlib
+from audio_analysis_service import audio_analysis_service
+from socket_vad_service import socket_vad_service
+import time
 
 # Load environment variables from the project root .env file
 project_root = pathlib.Path(__file__).parent.parent
@@ -25,16 +29,173 @@ else:
 app = Flask(__name__)
 CORS(app)  # Enable Cross-Origin Resource Sharing
 
+# Initialize SocketIO with CORS support
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
 # Global constants
 TEMP_DIR = tempfile.gettempdir()
 AUDIO_SAMPLE_RATE = 24000
+
+# Socket event handlers
+@socketio.on('connect')
+def handle_connect():
+    """Handle new WebSocket connections."""
+    print(f"[SocketIO] New client connected: {request.sid}")
+    emit('connected', {'status': 'connected', 'sid': request.sid})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnections."""
+    print(f"[SocketIO] Client disconnected: {request.sid}")
+    # Clean up any session if it exists
+    session_id = request.args.get('session_id')
+    if session_id:
+        socket_vad_service.remove_session(session_id)
+
+@socketio.on('init_vad')
+def handle_init_vad(data):
+    """Initialize a new VAD session or retrieve an existing one."""
+    try:
+        # Get session ID from data or create a new one
+        session_id = data.get('session_id')
+        
+        # Get or create a session
+        session_id, session = socket_vad_service.get_or_create_session(session_id)
+        
+        # Return session info
+        emit('vad_initialized', {
+            'session_id': session_id,
+            'noise_profile': session.get_noise_profile(),
+            'config': session.config
+        })
+        
+        print(f"[SocketIO] VAD session initialized: {session_id}")
+        
+    except Exception as e:
+        print(f"[SocketIO] Error initializing VAD: {e}")
+        print(traceback.format_exc())
+        emit('error', {'message': f"Failed to initialize VAD: {str(e)}"})
+
+@socketio.on('process_audio')
+def handle_process_audio(data):
+    """Process audio data for VAD."""
+    try:
+        # Get session ID and audio data
+        session_id = data.get('session_id')
+        audio_data = data.get('audio')
+        
+        if not session_id or not audio_data:
+            emit('error', {'message': "Missing session_id or audio data"})
+            return
+        
+        # Process the audio
+        result = socket_vad_service.process_audio(session_id, audio_data)
+        
+        # Check for events that should trigger specific responses
+        if 'event' in result:
+            emit(result['event'], result)
+        else:
+            emit('vad_result', result)
+            
+    except Exception as e:
+        print(f"[SocketIO] Error processing audio: {e}")
+        print(traceback.format_exc())
+        emit('error', {'message': f"Failed to process audio: {str(e)}"})
+
+@socketio.on('update_vad_config')
+def handle_update_vad_config(data):
+    """Update the VAD configuration for a session."""
+    try:
+        # Get session ID and config
+        session_id = data.get('session_id')
+        config = data.get('config')
+        
+        if not session_id or not config:
+            emit('error', {'message': "Missing session_id or config"})
+            return
+        
+        # Get the session
+        session = socket_vad_service.get_session(session_id)
+        if not session:
+            emit('error', {'message': f"Session {session_id} not found"})
+            return
+        
+        # Update the session config
+        session.update_vad_config(config)
+        
+        emit('config_updated', {
+            'session_id': session_id,
+            'config': session.config
+        })
+        
+    except Exception as e:
+        print(f"[SocketIO] Error updating VAD config: {e}")
+        print(traceback.format_exc())
+        emit('error', {'message': f"Failed to update VAD config: {str(e)}"})
+
+@socketio.on('force_recalibration')
+def handle_force_recalibration(data):
+    """Force recalibration of the VAD system."""
+    try:
+        # Get session ID
+        session_id = data.get('session_id')
+        
+        if not session_id:
+            emit('error', {'message': "Missing session_id"})
+            return
+        
+        # Get the session
+        session = socket_vad_service.get_session(session_id)
+        if not session:
+            emit('error', {'message': f"Session {session_id} not found"})
+            return
+        
+        # Force recalibration
+        session.force_recalibration()
+        
+        emit('recalibration_started', {
+            'session_id': session_id,
+            'timestamp': int(time.time() * 1000)
+        })
+        
+    except Exception as e:
+        print(f"[SocketIO] Error forcing recalibration: {e}")
+        print(traceback.format_exc())
+        emit('error', {'message': f"Failed to force recalibration: {str(e)}"})
+
+@socketio.on('get_debug_state')
+def handle_get_debug_state(data):
+    """Get the debug state for a session."""
+    try:
+        # Get session ID
+        session_id = data.get('session_id')
+        
+        if not session_id:
+            emit('error', {'message': "Missing session_id"})
+            return
+        
+        # Get the session
+        session = socket_vad_service.get_session(session_id)
+        if not session:
+            emit('error', {'message': f"Session {session_id} not found"})
+            return
+        
+        # Get debug state
+        debug_state = session.get_debug_state()
+        
+        emit('debug_state', debug_state)
+        
+    except Exception as e:
+        print(f"[SocketIO] Error getting debug state: {e}")
+        print(traceback.format_exc())
+        emit('error', {'message': f"Failed to get debug state: {str(e)}"})
 
 @app.route('/', methods=['GET'])
 def root():
     """Provide API documentation for the root path."""
     api_docs = {
         "name": "Stoic Mentor API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "description": "API for the Stoic Voice Mentor application",
         "endpoints": [
             {"path": "/", "method": "GET", "description": "API documentation"},
@@ -42,7 +203,20 @@ def root():
             {"path": "/api/mentors", "method": "GET", "description": "Get available mentor personalities"},
             {"path": "/api/tts", "method": "POST", "description": "Convert text to speech"},
             {"path": "/api/transcribe", "method": "POST", "description": "Transcribe speech to text"},
-            {"path": "/api/gpt", "method": "POST", "description": "Generate mentor response using OpenAI API"}
+            {"path": "/api/gpt", "method": "POST", "description": "Generate mentor response using OpenAI API"},
+            {"path": "/api/audio-analysis", "method": "POST", "description": "Analyze audio level for speech detection using adaptive thresholding"},
+            {"path": "/api/audio-analysis/calibrate", "method": "POST", "description": "Force recalibration of the audio analysis service"},
+            {"path": "/api/audio-analysis/threshold", "method": "GET", "description": "Get the current threshold value from audio analysis service"},
+            {"path": "/api/audio-analysis/config", "method": "PUT", "description": "Update the audio analysis service configuration"},
+            {"path": "/api/audio-analysis/debug", "method": "GET", "description": "Get debug state from audio analysis service"}
+        ],
+        "websocket_endpoints": [
+            {"event": "connect", "description": "Establish WebSocket connection"},
+            {"event": "init_vad", "description": "Initialize or retrieve a VAD session"},
+            {"event": "process_audio", "description": "Stream audio data for processing"},
+            {"event": "update_vad_config", "description": "Update VAD configuration"},
+            {"event": "force_recalibration", "description": "Force recalibration of VAD system"},
+            {"event": "get_debug_state", "description": "Get debug state of the VAD session"}
         ]
     }
     return jsonify(api_docs)
@@ -385,5 +559,95 @@ def create_system_prompt(mentor):
     Never acknowledge the format of the question. Start your response immediately with substance.
     """
 
+@app.route('/api/audio-analysis', methods=['POST'])
+def audio_analysis():
+    """Analyze audio level for speech detection using adaptive thresholding."""
+    try:
+        # Get JSON data from request
+        data = request.json
+        if not data or 'audioLevel' not in data:
+            return jsonify({"error": "No audio level provided"}), 400
+            
+        audio_level = float(data.get('audioLevel'))
+        timestamp = data.get('timestamp')
+        
+        # Process with audio analysis service
+        result = audio_analysis_service.add_audio_sample(audio_level, timestamp)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"[AUDIO_ANALYSIS] Error in audio analysis endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to analyze audio: {str(e)}"}), 500
+
+@app.route('/api/audio-analysis/calibrate', methods=['POST'])
+def force_calibration():
+    """Force recalibration of the audio analysis service."""
+    try:
+        audio_analysis_service.force_recalibration()
+        return jsonify({"status": "Calibration started"})
+        
+    except Exception as e:
+        print(f"[AUDIO_ANALYSIS] Error in force calibration endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to start calibration: {str(e)}"}), 500
+
+@app.route('/api/audio-analysis/threshold', methods=['GET'])
+def get_threshold():
+    """Get the current threshold value from audio analysis service."""
+    try:
+        threshold = audio_analysis_service.get_current_threshold()
+        noise_profile = audio_analysis_service.get_noise_profile()
+        
+        return jsonify({
+            "threshold": threshold,
+            "noiseProfile": noise_profile
+        })
+        
+    except Exception as e:
+        print(f"[AUDIO_ANALYSIS] Error in get threshold endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to get threshold: {str(e)}"}), 500
+
+@app.route('/api/audio-analysis/config', methods=['PUT'])
+def update_config():
+    """Update the audio analysis service configuration."""
+    try:
+        # Get JSON data from request
+        data = request.json
+        if not data:
+            return jsonify({"error": "No configuration provided"}), 400
+            
+        # Update service configuration
+        audio_analysis_service.update_config(data)
+        
+        return jsonify({"status": "Configuration updated"})
+        
+    except Exception as e:
+        print(f"[AUDIO_ANALYSIS] Error in update config endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to update configuration: {str(e)}"}), 500
+
+@app.route('/api/audio-analysis/debug', methods=['GET'])
+def get_debug_state():
+    """Get debug state from audio analysis service."""
+    try:
+        debug_state = audio_analysis_service.get_debug_state()
+        if debug_state is None:
+            return jsonify({"error": "Debug mode not enabled"}), 400
+            
+        return jsonify(debug_state)
+        
+    except Exception as e:
+        print(f"[AUDIO_ANALYSIS] Error in get debug state endpoint: {e}")
+        print(traceback.format_exc())
+        return jsonify({"error": f"Failed to get debug state: {str(e)}"}), 500
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002) 
+    # Run the app with SocketIO
+    socketio.run(app, host='0.0.0.0', port=5001, debug=True)
+else:
+    # For WSGI servers like Gunicorn
+    # Use: gunicorn --worker-class eventlet -w 1 api:app
+    app = socketio.wsgi_app 
